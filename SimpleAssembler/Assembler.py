@@ -1,243 +1,148 @@
 import sys
 import re
 
-# REGISTER ENCODING
-
-REGISTERS = {
-    "zero":0,"ra":1,"sp":2,"gp":3,"tp":4,
-    "t0":5,"t1":6,"t2":7,
-    "s0":8,"fp":8,"s1":9,
-    "a0":10,"a1":11,"a2":12,"a3":13,"a4":14,"a5":15,"a6":16,"a7":17,
-    "s2":18,"s3":19,"s4":20,"s5":21,"s6":22,"s7":23,"s8":24,"s9":25,"s10":26,"s11":27,
-    "t3":28,"t4":29,"t5":30,"t6":31
+REGISTER_MAP={
+"zero":"00000","ra":"00001","sp":"00010","gp":"00011","tp":"00100",
+"t0":"00101","t1":"00110","t2":"00111","s0":"01000","fp":"01000",
+"s1":"01001","a0":"01010","a1":"01011","a2":"01100","a3":"01101",
+"a4":"01110","a5":"01111","a6":"10000","a7":"10001","s2":"10010",
+"s3":"10011","s4":"10100","s5":"10101","s6":"10110","s7":"10111",
+"s8":"11000","s9":"11001","s10":"11010","s11":"11011","t3":"11100",
+"t4":"11101","t5":"11110","t6":"11111"
 }
 
-
-# HELPER FUNCTIONS
-
-def error(msg, line):
-    print(f"Error at line {line}: {msg}")
-    sys.exit()
-
-def to_bin(val, bits):
-    if val < 0:
-        val = (1 << bits) + val
-    return format(val, f'0{bits}b')
-
-def reg_bin(r, line):
-    if r not in REGISTERS:
-        error("Invalid register", line)
-    return to_bin(REGISTERS[r], 5)
-
-
-# OPCODE TABLES
-
-R_TYPE = {
-    "add":("0000000","000"),
-    "sub":("0100000","000"),
-    "sll":("0000000","001"),
-    "slt":("0000000","010"),
-    "sltu":("0000000","011"),
-    "xor":("0000000","100"),
-    "srl":("0000000","101"),
-    "or":("0000000","110"),
-    "and":("0000000","111")
+R_TYPE={
+"add":("0000000","000","0110011"),
+"sub":("0100000","000","0110011"),
+"sll":("0000000","001","0110011"),
+"slt":("0000000","010","0110011"),
+"xor":("0000000","100","0110011"),
+"srl":("0000000","101","0110011"),
+"or":("0000000","110","0110011"),
+"and":("0000000","111","0110011")
 }
 
-I_TYPE = {
-    "addi":"000",
-    "sltiu":"011",
-    "jalr":"000",
-    "lw":"010"
+I_TYPE={
+"addi":("000","0010011"),
+"lw":("010","0000011"),
+"jalr":("000","1100111")
 }
 
-S_TYPE = {"sw":"010"}
+S_TYPE={"sw":("010","0100011")}
+B_TYPE={"beq":("000","1100011"),"bne":("001","1100011")}
 
-B_TYPE = {
-    "beq":"000","bne":"001","blt":"100",
-    "bge":"101","bltu":"110","bgeu":"111"
-}
+def to_binary(v,b):
+    if v<0:v=(1<<b)+v
+    return format(v,f'0{b}b')[-b:]
 
-U_TYPE = {"lui":"0110111","auipc":"0010111"}
-J_TYPE = {"jal":"1101111"}
+def extract_instruction(l):
+    if ":" in l:return l.split(":",1)[1].strip()
+    return l.strip()
 
+def normalize(i):
+    return i.replace(" ","").lower()
 
-# PARSE HELPERS
-
-def parse_offset(token):
-    # matches 12(rs1)
-    m = re.match(r'(-?\d+)\((\w+)\)', token)
-    if not m:
-        return None
-    return int(m.group(1)), m.group(2)
-
-
-# ENCODERS
-
-
-def encode_R(op, rd, rs1, rs2, line):
-    funct7, funct3 = R_TYPE[op]
-    return (
-        funct7 +
-        reg_bin(rs2,line) +
-        reg_bin(rs1,line) +
-        funct3 +
-        reg_bin(rd,line) +
-        "0110011"
-    )
-
-def encode_I(op, rd, rs1, imm, line):
-    funct3 = I_TYPE[op]
-    opcode = "0010011" if op!="jalr" and op!="lw" else ("1100111" if op=="jalr" else "0000011")
-    return (
-        to_bin(imm,12) +
-        reg_bin(rs1,line) +
-        funct3 +
-        reg_bin(rd,line) +
-        opcode
-    )
-
-def encode_S(op, rs2, rs1, imm, line):
-    funct3 = S_TYPE[op]
-    imm_bin = to_bin(imm,12)
-    return (
-        imm_bin[:7] +
-        reg_bin(rs2,line) +
-        reg_bin(rs1,line) +
-        funct3 +
-        imm_bin[7:] +
-        "0100011"
-    )
-
-def encode_B(op, rs1, rs2, imm, line):
-    funct3 = B_TYPE[op]
-    imm_bin = to_bin(imm,13)
-    return (
-        imm_bin[0] +
-        imm_bin[2:8] +
-        reg_bin(rs2,line) +
-        reg_bin(rs1,line) +
-        funct3 +
-        imm_bin[8:12] +
-        imm_bin[1] +
-        "1100011"
-    )
-
-def encode_U(op, rd, imm, line):
-    opcode = U_TYPE[op]
-    return to_bin(imm,20) + reg_bin(rd,line) + opcode
-
-def encode_J(op, rd, imm, line):
-    imm_bin = to_bin(imm,21)
-    return (
-        imm_bin[0] +
-        imm_bin[10:20] +
-        imm_bin[9] +
-        imm_bin[1:9] +
-        reg_bin(rd,line) +
-        "1101111"
-    )
-
-
-# MAIN FUNCTION
-
-def main():
-
-    if len(sys.argv) < 3:
+def validate_virtual_halt(lines):
+    insts=[]
+    nums=[]
+    for i,l in enumerate(lines):
+        l=l.strip()
+        if not l:continue
+        ins=extract_instruction(l)
+        if ins:
+            insts.append(ins)
+            nums.append(i+1)
+    halt="beqzero,zero,0"
+    norm=[normalize(x) for x in insts]
+    if halt not in norm:
+        print(f"Error at line {nums[-1]}: Missing or invalid Virtual Halt")
+        sys.exit()
+    for i in range(len(norm)-1):
+        if norm[i]==halt:
+            print(f"Error at line {nums[i]}: Virtual Halt not last instruction")
+            sys.exit()
+    if norm[-1]!=halt:
+        print(f"Error at line {nums[-1]}: Missing or invalid Virtual Halt")
         sys.exit()
 
-    input_file = sys.argv[1]
-    output_file = sys.argv[2]
+def collect_labels(lines):
+    labels={}
+    pc=0
+    for l in lines:
+        c=l.strip()
+        if not c:continue
+        if ":" in c:
+            lab=c.split(":")[0].strip()
+            labels[lab]=pc
+            if c.endswith(":"):continue
+        pc+=4
+    return labels
 
-    with open(input_file) as f:
-        lines = f.readlines()
+def encode_r(op,rd,rs1,rs2):
+    f7,f3,opc=R_TYPE[op]
+    return f7+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+f3+REGISTER_MAP[rd]+opc
 
-    # PASS 1: LABEL COLLECTION
-    labels = {}
-    instructions = []
-    pc = 0
+def encode_i(op,rd,rs1,imm):
+    f3,opc=I_TYPE[op]
+    ib=to_binary(int(imm),12)
+    return ib+REGISTER_MAP[rs1]+f3+REGISTER_MAP[rd]+opc
 
-    for idx, raw in enumerate(lines):
-        line = raw.strip()
-        if not line:
-            continue
+def encode_s(op,rs1,rs2,imm):
+    f3,opc=S_TYPE[op]
+    ib=to_binary(int(imm),12)
+    return ib[:7]+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+f3+ib[7:]+opc
 
-        if ":" in line:
-            label, rest = line.split(":")
-            labels[label.strip()] = pc
-            line = rest.strip()
-            if not line:
-                continue
+def encode_b(op,rs1,rs2,imm):
+    f3,opc=B_TYPE[op]
+    ib=to_binary(int(imm),13)
+    return ib[0]+ib[2:8]+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+f3+ib[8:12]+ib[1]+opc
 
-        instructions.append((line, idx+1))
-        pc += 4
-
-    # Virtual halt check
-    if instructions[-1][0].replace(" ","") != "beqzero,zero,0":
-        error("Missing or invalid Virtual Halt", instructions[-1][1])
-
-    ########################################################
-
-    pc = 0
-    binary = []
-
-    for inst, line_no in instructions:
-
-        tokens = [t.strip() for t in re.split(r'[,\s]+', inst)]
-        op = tokens[0]
-
+def assemble(lines):
+    validate_virtual_halt(lines)
+    labels=collect_labels(lines)
+    pc=0
+    out=[]
+    for ln,l in enumerate(lines,start=1):
+        l=l.strip()
+        if not l:continue
+        ins=extract_instruction(l)
+        if not ins:continue
+        p=re.split(r'[,\s()]+',ins)
+        op=p[0]
         try:
-            # R TYPE
             if op in R_TYPE:
-                binary.append(encode_R(op,tokens[1],tokens[2],tokens[3],line_no))
-
-            # I TYPE (addi/sltiu/jalr)
-            elif op in ["addi","sltiu","jalr"]:
-                binary.append(encode_I(op,tokens[1],tokens[2],int(tokens[3]),line_no))
-
-            # LW
-            elif op == "lw":
-                imm, rs1 = parse_offset(tokens[2])
-                binary.append(encode_I(op,tokens[1],rs1,imm,line_no))
-
-            # SW
-            elif op == "sw":
-                imm, rs1 = parse_offset(tokens[2])
-                binary.append(encode_S(op,tokens[1],rs1,imm,line_no))
-
-            # BRANCH
+                rd,rs1,rs2=p[1:4]
+                b=encode_r(op,rd,rs1,rs2)
+            elif op in I_TYPE and op!="lw":
+                rd,rs1,imm=p[1:4]
+                b=encode_i(op,rd,rs1,imm)
+            elif op=="lw":
+                rd,imm,rs1=p[1:4]
+                b=encode_i(op,rd,rs1,imm)
+            elif op=="sw":
+                rs2,imm,rs1=p[1:4]
+                b=encode_s(op,rs1,rs2,imm)
             elif op in B_TYPE:
-                label = tokens[3]
-                if label not in labels:
-                    error("Undefined label", line_no)
-                offset = labels[label] - pc
-                binary.append(encode_B(op,tokens[1],tokens[2],offset,line_no))
-
-            # U TYPE
-            elif op in U_TYPE:
-                binary.append(encode_U(op,tokens[1],int(tokens[2]),line_no))
-
-            # J TYPE
-            elif op == "jal":
-                label = tokens[2]
-                if label not in labels:
-                    error("Undefined label", line_no)
-                offset = labels[label] - pc
-                binary.append(encode_J(op,tokens[1],offset,line_no))
-
+                rs1,rs2,lab=p[1:4]
+                if lab not in labels:
+                    print(f"Error at line {ln}: Undefined label")
+                    sys.exit()
+                off=labels[lab]-pc
+                b=encode_b(op,rs1,rs2,off)
             else:
-                error("Invalid instruction", line_no)
-
+                print(f"Error at line {ln}: Invalid instruction")
+                sys.exit()
+            out.append(b)
+            pc+=4
         except:
-            error("Syntax error", line_no)
+            print(f"Error at line {ln}: Invalid syntax")
+            sys.exit()
+    return out
 
-        pc += 4
+def main():
+    lines=sys.stdin.readlines()
+    mc=assemble(lines)
+    for c in mc:print(c)
 
-    ########################################################
-
-    with open(output_file,"w") as f:
-        for b in binary:
-            f.write(b+"\n")
-
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
