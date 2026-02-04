@@ -22,12 +22,7 @@ R_TYPE={
 "and":("0000000","111","0110011")
 }
 
-I_TYPE={
-"addi":("000","0010011"),
-"lw":("010","0000011"),
-"jalr":("000","1100111")
-}
-
+I_TYPE={"addi":("000","0010011"),"lw":("010","0000011"),"jalr":("000","1100111")}
 S_TYPE={"sw":("010","0100011")}
 B_TYPE={"beq":("000","1100011"),"bne":("001","1100011")}
 
@@ -113,22 +108,17 @@ def assemble(lines):
             if op in R_TYPE:
                 rd,rs1,rs2=p[1:4]
                 b=encode_r(op,rd,rs1,rs2)
-
             elif op in I_TYPE and op!="lw":
                 rd,rs1,imm=p[1:4]
                 b=encode_i(op,rd,rs1,imm)
-
             elif op=="lw":
                 rd,imm,rs1=p[1:4]
                 b=encode_i(op,rd,rs1,imm)
-
             elif op=="sw":
                 rs2,imm,rs1=p[1:4]
                 b=encode_s(op,rs1,rs2,imm)
-
             elif op in B_TYPE:
                 rs1,rs2,target=p[1:4]
-
                 if re.match(r'^-?\d+$',target):
                     off=int(target)
                 else:
@@ -136,26 +126,29 @@ def assemble(lines):
                         print(f"Error at line {ln}: Undefined label")
                         sys.exit()
                     off=labels[target]-pc
-
                 b=encode_b(op,rs1,rs2,off)
-
             else:
                 print(f"Error at line {ln}: Invalid instruction")
                 sys.exit()
-
             out.append(b)
             pc+=4
-
         except:
             print(f"Error at line {ln}: Invalid syntax")
             sys.exit()
-
     return out
 
 def main():
-    lines=sys.stdin.readlines()
-    mc=assemble(lines)
-    for c in mc:print(c)
+    input_file=sys.argv[1]
+    output_file=sys.argv[2]
+
+    with open(input_file,'r') as f:
+        lines=f.readlines()
+
+    machine=assemble(lines)
+
+    with open(output_file,'w') as f:
+        for m in machine:
+            f.write(m+"\n")
 
 if __name__=="__main__":
     main()
