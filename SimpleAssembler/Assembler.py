@@ -37,7 +37,12 @@ def extract_instruction(l):
 def normalize(i):
     return i.replace(" ","").lower()
 
-def validate_virtual_halt(lines):
+def error(msg,outfile):
+    with open(outfile,"w") as f:
+        f.write(msg+"\n")
+    sys.exit()
+
+def validate_virtual_halt(lines,outfile):
     insts=[]
     nums=[]
     for i,l in enumerate(lines):
@@ -47,18 +52,19 @@ def validate_virtual_halt(lines):
         if ins:
             insts.append(ins)
             nums.append(i+1)
+
     halt="beqzero,zero,0"
     norm=[normalize(x) for x in insts]
+
     if halt not in norm:
-        print(f"Error at line {nums[-1]}: Missing or invalid Virtual Halt")
-        sys.exit()
+        error(f"Error at line {nums[-1]}: Missing or invalid Virtual Halt",outfile)
+
     for i in range(len(norm)-1):
         if norm[i]==halt:
-            print(f"Error at line {nums[i]}: Virtual Halt not last instruction")
-            sys.exit()
+            error(f"Error at line {nums[i]}: Virtual Halt not last instruction",outfile)
+
     if norm[-1]!=halt:
-        print(f"Error at line {nums[-1]}: Missing or invalid Virtual Halt")
-        sys.exit()
+        error(f"Error at line {nums[-1]}: Missing or invalid Virtual Halt",outfile)
 
 def collect_labels(lines):
     labels={}
@@ -92,11 +98,12 @@ def encode_b(op,rs1,rs2,imm):
     ib=to_binary(int(imm),13)
     return ib[0]+ib[2:8]+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+f3+ib[8:12]+ib[1]+opc
 
-def assemble(lines):
-    validate_virtual_halt(lines)
+def assemble(lines,outfile):
+    validate_virtual_halt(lines,outfile)
     labels=collect_labels(lines)
     pc=0
     out=[]
+
     for ln,l in enumerate(lines,start=1):
         l=l.strip()
         if not l:continue
@@ -104,49 +111,57 @@ def assemble(lines):
         if not ins:continue
         p=re.split(r'[,\s()]+',ins)
         op=p[0]
+
         try:
             if op in R_TYPE:
                 rd,rs1,rs2=p[1:4]
                 b=encode_r(op,rd,rs1,rs2)
+
             elif op in I_TYPE and op!="lw":
                 rd,rs1,imm=p[1:4]
                 b=encode_i(op,rd,rs1,imm)
+
             elif op=="lw":
                 rd,imm,rs1=p[1:4]
                 b=encode_i(op,rd,rs1,imm)
+
             elif op=="sw":
                 rs2,imm,rs1=p[1:4]
                 b=encode_s(op,rs1,rs2,imm)
+
             elif op in B_TYPE:
                 rs1,rs2,target=p[1:4]
+
                 if re.match(r'^-?\d+$',target):
                     off=int(target)
                 else:
                     if target not in labels:
-                        print(f"Error at line {ln}: Undefined label")
-                        sys.exit()
+                        error(f"Error at line {ln}: Undefined label",outfile)
                     off=labels[target]-pc
+
                 b=encode_b(op,rs1,rs2,off)
+
             else:
-                print(f"Error at line {ln}: Invalid instruction")
-                sys.exit()
+                error(f"Error at line {ln}: Invalid instruction",outfile)
+
             out.append(b)
             pc+=4
+
         except:
-            print(f"Error at line {ln}: Invalid syntax")
-            sys.exit()
+            error(f"Error at line {ln}: Invalid syntax",outfile)
+
     return out
 
 def main():
     input_file=sys.argv[1]
     output_file=sys.argv[2]
 
-    with open(input_file,'r') as f:
+    with open(input_file,"r") as f:
         lines=f.readlines()
 
-    machine=assemble(lines)
+    machine=assemble(lines,output_file)
 
-    with open(output_file,'w') as f:
+    with open(output_file,"w") as f:
         for m in machine:
             f.write(m+"\n")
 
