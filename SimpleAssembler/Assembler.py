@@ -1,169 +1,204 @@
 import sys
-import re
 
 REGISTER_MAP={
-"zero":"00000","ra":"00001","sp":"00010","gp":"00011","tp":"00100",
-"t0":"00101","t1":"00110","t2":"00111","s0":"01000","fp":"01000",
-"s1":"01001","a0":"01010","a1":"01011","a2":"01100","a3":"01101",
-"a4":"01110","a5":"01111","a6":"10000","a7":"10001","s2":"10010",
-"s3":"10011","s4":"10100","s5":"10101","s6":"10110","s7":"10111",
-"s8":"11000","s9":"11001","s10":"11010","s11":"11011","t3":"11100",
-"t4":"11101","t5":"11110","t6":"11111"
+"x0":"00000","zero":"00000",
+"x1":"00001","ra":"00001",
+"x2":"00010","sp":"00010",
+"x3":"00011","gp":"00011",
+"x4":"00100","tp":"00100",
+"x5":"00101","t0":"00101",
+"x6":"00110","t1":"00110",
+"x7":"00111","t2":"00111",
+"x8":"01000","s0":"01000","fp":"01000",
+"x9":"01001","s1":"01001",
+"x10":"01010","a0":"01010",
+"x11":"01011","a1":"01011",
+"x12":"01100","a2":"01100",
+"x13":"01101","a3":"01101",
+"x14":"01110","a4":"01110",
+"x15":"01111","a5":"01111",
+"x16":"10000","a6":"10000",
+"x17":"10001","a7":"10001",
+"x18":"10010","s2":"10010",
+"x19":"10011","s3":"10011",
+"x20":"10100","s4":"10100",
+"x21":"10101","s5":"10101",
+"x22":"10110","s6":"10110",
+"x23":"10111","s7":"10111",
+"x24":"11000","s8":"11000",
+"x25":"11001","s9":"11001",
+"x26":"11010","s10":"11010",
+"x27":"11011","s11":"11011",
+"x28":"11100","t3":"11100",
+"x29":"11101","t4":"11101",
+"x30":"11110","t5":"11110",
+"x31":"11111","t6":"11111"
 }
 
 R_TYPE={
-"add":("0000000","000","0110011"),
-"sub":("0100000","000","0110011"),
-"sll":("0000000","001","0110011"),
-"slt":("0000000","010","0110011"),
-"xor":("0000000","100","0110011"),
-"srl":("0000000","101","0110011"),
-"or":("0000000","110","0110011"),
-"and":("0000000","111","0110011")
+"add":("000","0000000","0110011"),
+"sub":("000","0100000","0110011"),
+"and":("111","0000000","0110011"),
+"or":("110","0000000","0110011"),
+"slt":("010","0000000","0110011")
 }
 
-I_TYPE={"addi":("000","0010011"),"lw":("010","0000011"),"jalr":("000","1100111")}
-S_TYPE={"sw":("010","0100011")}
-B_TYPE={"beq":("000","1100011"),"bne":("001","1100011")}
+I_TYPE={
+"addi":("000","0010011"),
+"lw":("010","0000011"),
+"jalr":("000","1100111")
+}
 
-def to_binary(v,b):
-    if v<0:v=(1<<b)+v
-    return format(v,f'0{b}b')[-b:]
+S_TYPE={
+"sw":("010","0100011")
+}
 
-def extract_instruction(l):
-    if ":" in l:return l.split(":",1)[1].strip()
-    return l.strip()
+B_TYPE={
+"beq":("000","1100011"),
+"bne":("001","1100011"),
+"blt":("100","1100011"),
+"bge":("101","1100011")
+}
 
-def normalize(i):
-    return i.replace(" ","").lower()
+HALT_CODE="00000000000000000000000001100011"
 
-def error(msg,outfile):
-    with open(outfile,"w") as f:
-        f.write(msg+"\n")
-    sys.exit()
 
-def validate_virtual_halt(lines,outfile):
-    insts=[]
-    nums=[]
-    for i,l in enumerate(lines):
-        l=l.strip()
-        if not l:continue
-        ins=extract_instruction(l)
-        if ins:
-            insts.append(ins)
-            nums.append(i+1)
+def to_binary(n,bits):
+    if n<0:
+        n=(1<<bits)+n
+    return format(n,'0{}b'.format(bits))
 
-    halt="beqzero,zero,0"
-    norm=[normalize(x) for x in insts]
 
-    if halt not in norm:
-        error(f"Error at line {nums[-1]}: Missing or invalid Virtual Halt",outfile)
+def error(msg,line):
+    print(f"Error at line {line+1}: {msg}")
+    sys.exit(0)
 
-    for i in range(len(norm)-1):
-        if norm[i]==halt:
-            error(f"Error at line {nums[i]}: Virtual Halt not last instruction",outfile)
-
-    if norm[-1]!=halt:
-        error(f"Error at line {nums[-1]}: Missing or invalid Virtual Halt",outfile)
-
-def collect_labels(lines):
-    labels={}
-    pc=0
-    for l in lines:
-        c=l.strip()
-        if not c:continue
-        if ":" in c:
-            lab=c.split(":")[0].strip()
-            labels[lab]=pc
-            if c.endswith(":"):continue
-        pc+=4
-    return labels
 
 def encode_r(op,rd,rs1,rs2):
-    f7,f3,opc=R_TYPE[op]
-    return f7+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+f3+REGISTER_MAP[rd]+opc
+    funct3,funct7,opcode=R_TYPE[op]
+    return funct7+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+funct3+REGISTER_MAP[rd]+opcode
+
 
 def encode_i(op,rd,rs1,imm):
-    f3,opc=I_TYPE[op]
-    ib=to_binary(int(imm),12)
-    return ib+REGISTER_MAP[rs1]+f3+REGISTER_MAP[rd]+opc
+    funct3,opcode=I_TYPE[op]
+    imm=to_binary(int(imm),12)
+    return imm+REGISTER_MAP[rs1]+funct3+REGISTER_MAP[rd]+opcode
+
 
 def encode_s(op,rs1,rs2,imm):
-    f3,opc=S_TYPE[op]
-    ib=to_binary(int(imm),12)
-    return ib[:7]+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+f3+ib[7:]+opc
+    funct3,opcode=S_TYPE[op]
+    imm=to_binary(int(imm),12)
+    return imm[:7]+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+funct3+imm[7:]+opcode
 
-def encode_b(op,rs1,rs2,imm):
-    f3,opc=B_TYPE[op]
-    ib=to_binary(int(imm),13)
-    return ib[0]+ib[2:8]+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+f3+ib[8:12]+ib[1]+opc
 
-def assemble(lines,outfile):
-    validate_virtual_halt(lines,outfile)
-    labels=collect_labels(lines)
+def encode_b(op,rs1,rs2,offset):
+    funct3,opcode=B_TYPE[op]
+    offset//=2
+    imm=to_binary(offset,13)
+
+    return (
+        imm[0]+
+        imm[2:8]+
+        REGISTER_MAP[rs2]+
+        REGISTER_MAP[rs1]+
+        funct3+
+        imm[8:12]+
+        imm[1]+
+        opcode
+    )
+
+
+def preprocess(lines):
+    clean=[]
+    labels={}
     pc=0
-    out=[]
 
-    for ln,l in enumerate(lines,start=1):
-        l=l.strip()
-        if not l:continue
-        ins=extract_instruction(l)
-        if not ins:continue
-        p=re.split(r'[,\s()]+',ins)
+    for i,line in enumerate(lines):
+        line=line.strip()
+        if not line:
+            continue
+
+        if ":" in line:
+            label,rest=line.split(":",1)
+            labels[label.strip()]=pc
+            line=rest.strip()
+            if not line:
+                continue
+
+        clean.append((i,line))
+        pc+=4
+
+    return clean,labels
+
+
+def tokenize(line):
+    line=line.replace(",", " ")
+    line=line.replace("(", " ")
+    line=line.replace(")", " ")
+    return line.split()
+
+
+def assemble(clean,labels):
+    output=[]
+    pc=0
+    halt_found=False
+
+    for idx,line in clean:
+        p=tokenize(line)
         op=p[0]
 
-        try:
-            if op in R_TYPE:
-                rd,rs1,rs2=p[1:4]
-                b=encode_r(op,rd,rs1,rs2)
+        if op in R_TYPE:
+            rd,rs1,rs2=p[1:4]
+            b=encode_r(op,rd,rs1,rs2)
 
-            elif op in I_TYPE and op!="lw":
+        elif op in I_TYPE:
+            if op=="lw":
+                rd=p[1]
+                imm=p[2]
+                rs1=p[3]
+                b=encode_i(op,rd,rs1,imm)
+            else:
                 rd,rs1,imm=p[1:4]
                 b=encode_i(op,rd,rs1,imm)
 
-            elif op=="lw":
-                rd,imm,rs1=p[1:4]
-                b=encode_i(op,rd,rs1,imm)
+        elif op in S_TYPE:
+            rs2,imm,rs1=p[1:4]
+            b=encode_s(op,rs1,rs2,imm)
 
-            elif op=="sw":
-                rs2,imm,rs1=p[1:4]
-                b=encode_s(op,rs1,rs2,imm)
+        elif op in B_TYPE:
+            rs1,rs2,target=p[1:4]
 
-            elif op in B_TYPE:
-                rs1,rs2,target=p[1:4]
+            if target not in labels:
+                error("Undefined label",idx)
 
-                if re.match(r'^-?\d+$',target):
-                    off=int(target)
-                else:
-                    if target not in labels:
-                        error(f"Error at line {ln}: Undefined label",outfile)
-                    off=labels[target]-pc
+            off=labels[target]-pc
+            b=encode_b(op,rs1,rs2,off)
 
-                b=encode_b(op,rs1,rs2,off)
+            if rs1=="zero" and rs2=="zero" and off==0:
+                halt_found=True
+                if pc!=(len(clean)-1)*4:
+                    error("Virtual Halt not last instruction",idx)
 
-            else:
-                error(f"Error at line {ln}: Invalid instruction",outfile)
+        else:
+            error("Invalid syntax",idx)
 
-            out.append(b)
-            pc+=4
+        output.append(b)
+        pc+=4
 
-        except:
-            error(f"Error at line {ln}: Invalid syntax",outfile)
+    if not halt_found:
+        error("Missing Virtual Halt",clean[-1][0])
 
-    return out
+    return output
+
 
 def main():
-    input_file=sys.argv[1]
-    output_file=sys.argv[2]
+    lines=sys.stdin.readlines()
+    clean,labels=preprocess(lines)
+    machine=assemble(clean,labels)
 
-    with open(input_file,"r") as f:
-        lines=f.readlines()
+    for m in machine:
+        print(m)
 
-    machine=assemble(lines,output_file)
-
-    with open(output_file,"w") as f:
-        for m in machine:
-            f.write(m+"\n")
 
 if __name__=="__main__":
     main()
