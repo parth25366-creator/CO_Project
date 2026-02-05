@@ -1,6 +1,6 @@
 import sys
 
-REGISTER_MAP={
+REG={
 "x0":"00000","zero":"00000",
 "x1":"00001","ra":"00001",
 "x2":"00010","sp":"00010",
@@ -35,175 +35,131 @@ REGISTER_MAP={
 "x31":"11111","t6":"11111"
 }
 
-R_TYPE={
-"add":("000","0000000","0110011"),
-"sub":("000","0100000","0110011"),
-"and":("111","0000000","0110011"),
-"or":("110","0000000","0110011"),
-"slt":("010","0000000","0110011")
-}
-
-I_TYPE={
-"addi":("000","0010011"),
-"lw":("010","0000011"),
-"jalr":("000","1100111")
-}
-
-S_TYPE={"sw":("010","0100011")}
-
-B_TYPE={
-"beq":("000","1100011"),
-"bne":("001","1100011"),
-"blt":("100","1100011"),
-"bge":("101","1100011")
-}
-
-HALT_CODE="00000000000000000000000001100011"
-
-
-def to_binary(n,bits):
-    if n<0:
-        n=(1<<bits)+n
-    return format(n,'0{}b'.format(bits))
-
-
 def error(msg,line):
     print(f"Error at line {line+1}: {msg}")
     sys.exit(0)
 
+def to_bin(n,bits):
+    if n<0:n=(1<<bits)+n
+    return format(n,f'0{bits}b')
+
+# ---------- R TYPE ----------
+R_TYPE={
+"add":("000","0000000"),
+"sub":("000","0100000"),
+"and":("111","0000000"),
+"or":("110","0000000"),
+"slt":("010","0000000"),
+"srl":("101","0000000")
+}
 
 def encode_r(op,rd,rs1,rs2):
-    funct3,funct7,opcode=R_TYPE[op]
-    return funct7+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+funct3+REGISTER_MAP[rd]+opcode
+    f3,f7=R_TYPE[op]
+    return f7+REG[rs2]+REG[rs1]+f3+REG[rd]+"0110011"
 
-
+# ---------- I TYPE ----------
 def encode_i(op,rd,rs1,imm):
-    funct3,opcode=I_TYPE[op]
-    imm=to_binary(int(imm),12)
-    return imm+REGISTER_MAP[rs1]+funct3+REGISTER_MAP[rd]+opcode
+    OPC={"addi":"0010011","lw":"0000011","jalr":"1100111"}
+    F3={"addi":"000","lw":"010","jalr":"000"}
+    return to_bin(int(imm),12)+REG[rs1]+F3[op]+REG[rd]+OPC[op]
 
+# ---------- S TYPE ----------
+def encode_sw(rs1,rs2,imm):
+    imm=to_bin(int(imm),12)
+    return imm[:7]+REG[rs2]+REG[rs1]+"010"+imm[7:]+"0100011"
 
-def encode_s(op,rs1,rs2,imm):
-    funct3,opcode=S_TYPE[op]
-    imm=to_binary(int(imm),12)
-    return imm[:7]+REGISTER_MAP[rs2]+REGISTER_MAP[rs1]+funct3+imm[7:]+opcode
-
-
+# ---------- B TYPE ----------
 def encode_b(op,rs1,rs2,offset):
-    funct3,opcode=B_TYPE[op]
+    F3={"beq":"000","bne":"001","blt":"100","bge":"101"}
     offset//=2
-    imm=to_binary(offset,13)
+    imm=to_bin(offset,13)
+    return imm[0]+imm[2:8]+REG[rs2]+REG[rs1]+F3[op]+imm[8:12]+imm[1]+"1100011"
 
-    return(
-        imm[0]+
-        imm[2:8]+
-        REGISTER_MAP[rs2]+
-        REGISTER_MAP[rs1]+
-        funct3+
-        imm[8:12]+
-        imm[1]+
-        opcode
-    )
+# ---------- J TYPE ----------
+def encode_jal(rd,offset):
+    offset//=2
+    imm=to_bin(offset,21)
+    return imm[0]+imm[10:20]+imm[9]+imm[1:9]+REG[rd]+"1101111"
 
-
+# ---------- PREPROCESS ----------
 def preprocess(lines):
-    clean=[]
+    code=[]
     labels={}
     pc=0
 
-    for i,line in enumerate(lines):
-        line=line.strip()
-        if not line:
-            continue
+    for i,l in enumerate(lines):
+        l=l.strip()
+        if not l:continue
 
-        if ":" in line:
-            label,rest=line.split(":",1)
-            labels[label.strip()]=pc
-            line=rest.strip()
-            if not line:
-                continue
+        if ":" in l:
+            lab,rest=l.split(":",1)
+            labels[lab.strip()]=pc
+            l=rest.strip()
+            if not l:continue
 
-        clean.append((i,line))
+        code.append((i,l))
         pc+=4
 
-    return clean,labels
-
+    return code,labels
 
 def tokenize(line):
-    line=line.replace(",", " ")
-    line=line.replace("(", " ")
-    line=line.replace(")", " ")
+    for c in ",()":line=line.replace(c," ")
     return line.split()
 
-
-def assemble(clean,labels):
-    output=[]
+# ---------- ASSEMBLE ----------
+def assemble(code,labels):
+    out=[]
     pc=0
-    halt_found=False
+    halt=False
 
-    for idx,line in clean:
-        p=tokenize(line)
+    for i,l in code:
+        p=tokenize(l)
         op=p[0]
 
         if op in R_TYPE:
-            rd,rs1,rs2=p[1:4]
-            b=encode_r(op,rd,rs1,rs2)
+            out.append(encode_r(op,p[1],p[2],p[3]))
 
-        elif op in I_TYPE:
-            if op=="lw":
-                rd=p[1]
-                imm=p[2]
-                rs1=p[3]
-                b=encode_i(op,rd,rs1,imm)
-            else:
-                rd,rs1,imm=p[1:4]
-                b=encode_i(op,rd,rs1,imm)
+        elif op in ["addi","jalr"]:
+            out.append(encode_i(op,p[1],p[2],p[3]))
 
-        elif op in S_TYPE:
-            rs2,imm,rs1=p[1:4]
-            b=encode_s(op,rs1,rs2,imm)
+        elif op=="lw":
+            out.append(encode_i("lw",p[1],p[3],p[2]))
 
-        elif op in B_TYPE:
-            rs1,rs2,target=p[1:4]
+        elif op=="sw":
+            out.append(encode_sw(p[3],p[1],p[2]))
 
-            if target not in labels:
-                error("Undefined label",idx)
+        elif op in ["beq","bne","blt","bge"]:
+            if p[3] not in labels:error("Undefined label",i)
+            off=labels[p[3]]-pc
+            out.append(encode_b(op,p[1],p[2],off))
 
-            off=labels[target]-pc
-            b=encode_b(op,rs1,rs2,off)
+            if p[1]=="zero" and p[2]=="zero" and off==0:
+                halt=True
+                if pc!=(len(code)-1)*4:
+                    error("Virtual Halt not last instruction",i)
 
-            if rs1=="zero" and rs2=="zero" and off==0:
-                halt_found=True
-                if pc!=(len(clean)-1)*4:
-                    error("Virtual Halt not last instruction",idx)
+        elif op=="jal":
+            if p[2] not in labels:error("Undefined label",i)
+            off=labels[p[2]]-pc
+            out.append(encode_jal(p[1],off))
 
         else:
-            error("Invalid syntax",idx)
+            error("Invalid syntax",i)
 
-        output.append(b)
         pc+=4
 
-    if not halt_found:
-        error("Missing Virtual Halt",clean[-1][0])
+    if not halt:error("Missing Virtual Halt",code[-1][0])
+    return out
 
-    return output
-
-
+# ---------- MAIN ----------
 def main():
-    try:
-        lines=sys.stdin.read().splitlines()
+    lines=sys.stdin.read().splitlines()
+    if not lines:return
 
-        if not lines:
-            return
+    code,labels=preprocess(lines)
+    machine=assemble(code,labels)
 
-        clean,labels=preprocess(lines)
-        machine=assemble(clean,labels)
-
-        sys.stdout.write("\n".join(machine))
-
-    except:
-        pass
-
+    sys.stdout.write("\n".join(machine))
 
 if __name__=="__main__":
     main()
