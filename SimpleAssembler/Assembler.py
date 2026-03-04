@@ -1,10 +1,51 @@
 import sys
 
 # ----------------------------------------
-# REGISTER MAP
+# REGISTER MAP (x registers + ABI names)
 # ----------------------------------------
 
-REGISTER_MAP = {f"x{i}": format(i, "05b") for i in range(32)}
+REGISTER_MAP = {
+    **{f"x{i}": format(i, "05b") for i in range(32)},
+
+    "zero": format(0, "05b"),
+    "ra": format(1, "05b"),
+    "sp": format(2, "05b"),
+    "gp": format(3, "05b"),
+    "tp": format(4, "05b"),
+
+    "t0": format(5, "05b"),
+    "t1": format(6, "05b"),
+    "t2": format(7, "05b"),
+
+    "s0": format(8, "05b"),
+    "fp": format(8, "05b"),
+    "s1": format(9, "05b"),
+
+    "a0": format(10, "05b"),
+    "a1": format(11, "05b"),
+    "a2": format(12, "05b"),
+    "a3": format(13, "05b"),
+    "a4": format(14, "05b"),
+    "a5": format(15, "05b"),
+    "a6": format(16, "05b"),
+    "a7": format(17, "05b"),
+
+    "s2": format(18, "05b"),
+    "s3": format(19, "05b"),
+    "s4": format(20, "05b"),
+    "s5": format(21, "05b"),
+    "s6": format(22, "05b"),
+    "s7": format(23, "05b"),
+    "s8": format(24, "05b"),
+    "s9": format(25, "05b"),
+    "s10": format(26, "05b"),
+    "s11": format(27, "05b"),
+
+    "t3": format(28, "05b"),
+    "t4": format(29, "05b"),
+    "t5": format(30, "05b"),
+    "t6": format(31, "05b"),
+}
 
 # ----------------------------------------
 # OPCODE TABLE
@@ -13,18 +54,18 @@ REGISTER_MAP = {f"x{i}": format(i, "05b") for i in range(32)}
 OPCODE_TABLE = {
     "add":  {"type": "R", "opcode": "0110011", "funct3": "000", "funct7": "0000000"},
     "sub":  {"type": "R", "opcode": "0110011", "funct3": "000", "funct7": "0100000"},
-    
+
     "addi": {"type": "I", "opcode": "0010011", "funct3": "000"},
     "lw":   {"type": "I", "opcode": "0000011", "funct3": "010"},
     "jalr": {"type": "I", "opcode": "1100111", "funct3": "000"},
-    
+
     "sw":   {"type": "S", "opcode": "0100011", "funct3": "010"},
-    
+
     "beq":  {"type": "B", "opcode": "1100011", "funct3": "000"},
-    
+
     "lui":  {"type": "U", "opcode": "0110111"},
     "auipc":{"type": "U", "opcode": "0010111"},
-    
+
     "jal":  {"type": "J", "opcode": "1101111"},
 }
 
@@ -38,11 +79,9 @@ def to_binary(value, bits):
         value = (1 << bits) + value
     return format(value, f"0{bits}b")
 
-
 def clean_line(line):
     line = line.split("#")[0]
     return line.strip()
-
 
 # ----------------------------------------
 # FIRST PASS (LABEL COLLECTION)
@@ -51,7 +90,7 @@ def clean_line(line):
 def first_pass(lines):
     symbol_table = {}
     pc = 0
-    
+
     for line in lines:
         if ":" in line:
             label = line.replace(":", "").strip()
@@ -60,7 +99,6 @@ def first_pass(lines):
             pc += 4
 
     return symbol_table
-
 
 # ----------------------------------------
 # ENCODERS
@@ -71,7 +109,6 @@ def encode_R(parts):
     rd = REGISTER_MAP[parts[1]]
     rs1 = REGISTER_MAP[parts[2]]
     rs2 = REGISTER_MAP[parts[3]]
-
     info = OPCODE_TABLE[instr]
 
     return (
@@ -83,15 +120,12 @@ def encode_R(parts):
         info["opcode"]
     )
 
-
 def encode_I(parts):
     instr = parts[0]
     info = OPCODE_TABLE[instr]
-
     rd = REGISTER_MAP[parts[1]]
 
     if instr == "lw":
-        # lw x1, 0(x2)
         imm, rs1 = parts[2].split("(")
         rs1 = rs1.replace(")", "")
         rs1 = REGISTER_MAP[rs1]
@@ -108,7 +142,6 @@ def encode_I(parts):
         rd +
         info["opcode"]
     )
-
 
 def encode_S(parts):
     instr = parts[0]
@@ -130,7 +163,6 @@ def encode_S(parts):
         info["opcode"]
     )
 
-
 def encode_B(parts, pc, symbol_table):
     instr = parts[0]
     info = OPCODE_TABLE[instr]
@@ -138,10 +170,9 @@ def encode_B(parts, pc, symbol_table):
     rs1 = REGISTER_MAP[parts[1]]
     rs2 = REGISTER_MAP[parts[2]]
 
-    label = parts[3]
-    target = symbol_table[label]
-
+    target = symbol_table[parts[3]]
     offset = target - pc
+
     imm_bin = to_binary(offset, 13)
 
     return (
@@ -155,27 +186,23 @@ def encode_B(parts, pc, symbol_table):
         info["opcode"]
     )
 
-
 def encode_U(parts):
     instr = parts[0]
     info = OPCODE_TABLE[instr]
 
     rd = REGISTER_MAP[parts[1]]
-    imm = to_binary(parts[2], 20)
+    imm_bin = to_binary(parts[2], 20)
 
-    return imm + rd + info["opcode"]
-
+    return imm_bin + rd + info["opcode"]
 
 def encode_J(parts, pc, symbol_table):
     instr = parts[0]
     info = OPCODE_TABLE[instr]
 
     rd = REGISTER_MAP[parts[1]]
-    label = parts[2]
+    target = symbol_table[parts[2]]
 
-    target = symbol_table[label]
     offset = target - pc
-
     imm_bin = to_binary(offset, 21)
 
     return (
@@ -186,7 +213,6 @@ def encode_J(parts, pc, symbol_table):
         rd +
         info["opcode"]
     )
-
 
 # ----------------------------------------
 # SECOND PASS
@@ -200,9 +226,10 @@ def second_pass(lines, symbol_table):
         if ":" in line:
             continue
 
-        parts = line.replace(",", "").split()
-        instr = parts[0]
+        line = line.replace(",", " ")
+        parts = line.split()
 
+        instr = parts[0]
         instr_type = OPCODE_TABLE[instr]["type"]
 
         if instr_type == "R":
@@ -222,7 +249,6 @@ def second_pass(lines, symbol_table):
         pc += 4
 
     return output
-
 
 # ----------------------------------------
 # MAIN
@@ -246,7 +272,6 @@ def main():
 
     with open(output_file, "w") as f:
         f.write("\n".join(binary_output))
-
 
 if __name__ == "__main__":
     main()
