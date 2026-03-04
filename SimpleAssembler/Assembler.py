@@ -93,7 +93,7 @@ def clean_line(line):
     return line.strip()
 
 # ----------------------------------------
-# FIRST PASS
+# FIRST PASS (LABEL COLLECTION)
 # ----------------------------------------
 
 def first_pass(lines):
@@ -160,7 +160,6 @@ def encode_B(parts, pc, symbol_table):
 
     imm = to_binary(offset, 13)
 
-    # Correct B-type bit placement
     return (
         imm[0] +          # imm[12]
         imm[2:8] +        # imm[10:5]
@@ -189,7 +188,6 @@ def encode_J(parts, pc, symbol_table):
 
     imm = to_binary(offset, 21)
 
-    # Correct J-type placement
     return (
         imm[0] +          # imm[20]
         imm[10:20] +      # imm[10:1]
@@ -200,7 +198,7 @@ def encode_J(parts, pc, symbol_table):
     )
 
 # ----------------------------------------
-# SECOND PASS
+# SECOND PASS (WITH ERROR HANDLING)
 # ----------------------------------------
 
 def second_pass(lines, symbol_table):
@@ -208,33 +206,43 @@ def second_pass(lines, symbol_table):
     output = []
 
     for line in lines:
-        if ":" in line:
-            if line.strip().endswith(":"):
-                continue
-            else:
-                line = line.split(":")[1].strip()
+        try:
+            if ":" in line:
+                if line.strip().endswith(":"):
+                    continue
+                else:
+                    line = line.split(":")[1].strip()
 
-        line = line.replace(",", " ")
-        parts = line.split()
+            line = line.replace(",", " ")
+            parts = line.split()
 
-        instr = parts[0]
-        instr_type = OPCODE_TABLE[instr]["type"]
+            instr = parts[0]
 
-        if instr_type == "R":
-            binary = encode_R(parts)
-        elif instr_type == "I":
-            binary = encode_I(parts)
-        elif instr_type == "S":
-            binary = encode_S(parts)
-        elif instr_type == "B":
-            binary = encode_B(parts, pc, symbol_table)
-        elif instr_type == "U":
-            binary = encode_U(parts)
-        elif instr_type == "J":
-            binary = encode_J(parts, pc, symbol_table)
+            if instr not in OPCODE_TABLE:
+                print("Error")
+                sys.exit()
 
-        output.append(binary)
-        pc += 4
+            instr_type = OPCODE_TABLE[instr]["type"]
+
+            if instr_type == "R":
+                binary = encode_R(parts)
+            elif instr_type == "I":
+                binary = encode_I(parts)
+            elif instr_type == "S":
+                binary = encode_S(parts)
+            elif instr_type == "B":
+                binary = encode_B(parts, pc, symbol_table)
+            elif instr_type == "U":
+                binary = encode_U(parts)
+            elif instr_type == "J":
+                binary = encode_J(parts, pc, symbol_table)
+
+            output.append(binary)
+            pc += 4
+
+        except:
+            print("Error")
+            sys.exit()
 
     return output
 
@@ -243,23 +251,28 @@ def second_pass(lines, symbol_table):
 # ----------------------------------------
 
 def main():
-    input_file = sys.argv[1]
-    output_file = sys.argv[2]
+    try:
+        input_file = sys.argv[1]
+        output_file = sys.argv[2]
 
-    with open(input_file, "r") as f:
-        raw_lines = f.readlines()
+        with open(input_file, "r") as f:
+            raw_lines = f.readlines()
 
-    lines = []
-    for line in raw_lines:
-        cleaned = clean_line(line)
-        if cleaned:
-            lines.append(cleaned)
+        lines = []
+        for line in raw_lines:
+            cleaned = clean_line(line)
+            if cleaned:
+                lines.append(cleaned)
 
-    symbol_table = first_pass(lines)
-    binary_output = second_pass(lines, symbol_table)
+        symbol_table = first_pass(lines)
+        binary_output = second_pass(lines, symbol_table)
 
-    with open(output_file, "w") as f:
-        f.write("\n".join(binary_output))
+        with open(output_file, "w") as f:
+            f.write("\n".join(binary_output))
+
+    except:
+        print("Error")
+        sys.exit()
 
 if __name__ == "__main__":
     main()
