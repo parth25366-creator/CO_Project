@@ -1,278 +1,159 @@
 import sys
 
-# ----------------------------------------
-# REGISTER MAP (x registers + ABI names)
-# ----------------------------------------
-
 REGISTER_MAP = {
     **{f"x{i}": format(i, "05b") for i in range(32)},
-
-    "zero": format(0, "05b"),
-    "ra": format(1, "05b"),
-    "sp": format(2, "05b"),
-    "gp": format(3, "05b"),
-    "tp": format(4, "05b"),
-
-    "t0": format(5, "05b"),
-    "t1": format(6, "05b"),
-    "t2": format(7, "05b"),
-
-    "s0": format(8, "05b"),
-    "fp": format(8, "05b"),
-    "s1": format(9, "05b"),
-
-    "a0": format(10, "05b"),
-    "a1": format(11, "05b"),
-    "a2": format(12, "05b"),
-    "a3": format(13, "05b"),
-    "a4": format(14, "05b"),
-    "a5": format(15, "05b"),
-    "a6": format(16, "05b"),
-    "a7": format(17, "05b"),
-
-    "s2": format(18, "05b"),
-    "s3": format(19, "05b"),
-    "s4": format(20, "05b"),
-    "s5": format(21, "05b"),
-    "s6": format(22, "05b"),
-    "s7": format(23, "05b"),
-    "s8": format(24, "05b"),
-    "s9": format(25, "05b"),
-    "s10": format(26, "05b"),
+    "zero": format(0, "05b"), "ra": format(1, "05b"), "sp": format(2, "05b"),
+    "gp": format(3, "05b"), "tp": format(4, "05b"),
+    "t0": format(5, "05b"), "t1": format(6, "05b"), "t2": format(7, "05b"),
+    "s0": format(8, "05b"), "fp": format(8, "05b"), "s1": format(9, "05b"),
+    "a0": format(10, "05b"), "a1": format(11, "05b"), "a2": format(12, "05b"),
+    "a3": format(13, "05b"), "a4": format(14, "05b"), "a5": format(15, "05b"),
+    "a6": format(16, "05b"), "a7": format(17, "05b"),
+    "s2": format(18, "05b"), "s3": format(19, "05b"), "s4": format(20, "05b"),
+    "s5": format(21, "05b"), "s6": format(22, "05b"), "s7": format(23, "05b"),
+    "s8": format(24, "05b"), "s9": format(25, "05b"), "s10": format(26, "05b"),
     "s11": format(27, "05b"),
-
-    "t3": format(28, "05b"),
-    "t4": format(29, "05b"),
-    "t5": format(30, "05b"),
-    "t6": format(31, "05b"),
+    "t3": format(28, "05b"), "t4": format(29, "05b"),
+    "t5": format(30, "05b"), "t6": format(31, "05b"),
 }
 
-# ----------------------------------------
-# OPCODE TABLE
-# ----------------------------------------
-
 OPCODE_TABLE = {
-    # R-type
     "add":  {"type": "R", "opcode": "0110011", "funct3": "000", "funct7": "0000000"},
     "sub":  {"type": "R", "opcode": "0110011", "funct3": "000", "funct7": "0100000"},
     "slt":  {"type": "R", "opcode": "0110011", "funct3": "010", "funct7": "0000000"},
     "srl":  {"type": "R", "opcode": "0110011", "funct3": "101", "funct7": "0000000"},
-
-    # I-type
     "addi": {"type": "I", "opcode": "0010011", "funct3": "000"},
     "lw":   {"type": "I", "opcode": "0000011", "funct3": "010"},
     "jalr": {"type": "I", "opcode": "1100111", "funct3": "000"},
-
-    # S-type
     "sw":   {"type": "S", "opcode": "0100011", "funct3": "010"},
-
-    # B-type
     "beq":  {"type": "B", "opcode": "1100011", "funct3": "000"},
     "bne":  {"type": "B", "opcode": "1100011", "funct3": "001"},
-
-    # U-type
-    "lui":   {"type": "U", "opcode": "0110111"},
-    "auipc": {"type": "U", "opcode": "0010111"},
-
-    # J-type
+    "lui":  {"type": "U", "opcode": "0110111"},
+    "auipc":{"type": "U", "opcode": "0010111"},
     "jal":  {"type": "J", "opcode": "1101111"},
 }
 
-# ----------------------------------------
-# UTILITIES
-# ----------------------------------------
+def to_binary(a, b):
+    a = int(a)
+    if a < 0:
+        a = (1 << b) + a
+    return format(a, f"0{b}b")
 
-def to_binary(value, bits):
-    value = int(value)
-    if value < 0:
-        value = (1 << bits) + value
-    return format(value, f"0{bits}b")
+def clean_line(a):
+    a = a.split("#")[0]
+    return a.strip()
 
-def clean_line(line):
-    line = line.split("#")[0]
-    return line.strip()
-
-# ----------------------------------------
-# FIRST PASS (LABEL COLLECTION)
-# ----------------------------------------
-
-def first_pass(lines):
-    symbol_table = {}
-    pc = 0
-
-    for line in lines:
-        if ":" in line:
-            label, rest = line.split(":")
-            symbol_table[label.strip()] = pc
-            if rest.strip() != "":
-                pc += 4
+def first_pass(a):
+    s = {}
+    p = 0
+    for l in a:
+        if ":" in l:
+            x, y = l.split(":")
+            s[x.strip()] = p
+            if y.strip() != "":
+                p += 4
         else:
-            pc += 4
+            p += 4
+    return s
 
-    return symbol_table
+def encode_R(a):
+    i = OPCODE_TABLE[a[0]]
+    d = REGISTER_MAP[a[1]]
+    s1 = REGISTER_MAP[a[2]]
+    s2 = REGISTER_MAP[a[3]]
+    return i["funct7"] + s2 + s1 + i["funct3"] + d + i["opcode"]
 
-# ----------------------------------------
-# ENCODERS
-# ----------------------------------------
-
-def encode_R(parts):
-    info = OPCODE_TABLE[parts[0]]
-    rd = REGISTER_MAP[parts[1]]
-    rs1 = REGISTER_MAP[parts[2]]
-    rs2 = REGISTER_MAP[parts[3]]
-    return info["funct7"] + rs2 + rs1 + info["funct3"] + rd + info["opcode"]
-
-def encode_I(parts):
-    instr = parts[0]
-    info = OPCODE_TABLE[instr]
-    rd = REGISTER_MAP[parts[1]]
-
-    if instr == "lw":
-        imm, rs1 = parts[2].split("(")
-        rs1 = rs1.replace(")", "")
-        rs1 = REGISTER_MAP[rs1]
+def encode_I(a):
+    i = OPCODE_TABLE[a[0]]
+    d = REGISTER_MAP[a[1]]
+    if a[0] == "lw":
+        im, s1 = a[2].split("(")
+        s1 = REGISTER_MAP[s1.replace(")", "")]
     else:
-        rs1 = REGISTER_MAP[parts[2]]
-        imm = parts[3]
+        s1 = REGISTER_MAP[a[2]]
+        im = a[3]
+    b = to_binary(im, 12)
+    return b + s1 + i["funct3"] + d + i["opcode"]
 
-    imm_bin = to_binary(imm, 12)
-    return imm_bin + rs1 + info["funct3"] + rd + info["opcode"]
+def encode_S(a):
+    i = OPCODE_TABLE[a[0]]
+    s2 = REGISTER_MAP[a[1]]
+    im, s1 = a[2].split("(")
+    s1 = REGISTER_MAP[s1.replace(")", "")]
+    b = to_binary(im, 12)
+    return b[:7] + s2 + s1 + i["funct3"] + b[7:] + i["opcode"]
 
-def encode_S(parts):
-    info = OPCODE_TABLE[parts[0]]
-    rs2 = REGISTER_MAP[parts[1]]
-    imm, rs1 = parts[2].split("(")
-    rs1 = rs1.replace(")", "")
-    rs1 = REGISTER_MAP[rs1]
+def encode_B(a, p, s):
+    i = OPCODE_TABLE[a[0]]
+    s1 = REGISTER_MAP[a[1]]
+    s2 = REGISTER_MAP[a[2]]
+    o = s[a[3]] - p if a[3] in s else int(a[3])
+    b = to_binary(o, 13)
+    return b[0] + b[2:8] + s2 + s1 + i["funct3"] + b[8:12] + b[1] + i["opcode"]
 
-    imm_bin = to_binary(imm, 12)
-    return imm_bin[:7] + rs2 + rs1 + info["funct3"] + imm_bin[7:] + info["opcode"]
+def encode_U(a):
+    i = OPCODE_TABLE[a[0]]
+    d = REGISTER_MAP[a[1]]
+    b = to_binary(a[2], 20)
+    return b + d + i["opcode"]
 
-def encode_B(parts, pc, symbol_table):
-    info = OPCODE_TABLE[parts[0]]
-    rs1 = REGISTER_MAP[parts[1]]
-    rs2 = REGISTER_MAP[parts[2]]
+def encode_J(a, p, s):
+    i = OPCODE_TABLE[a[0]]
+    d = REGISTER_MAP[a[1]]
+    o = s[a[2]] - p if a[2] in s else int(a[2])
+    b = to_binary(o, 21)
+    return b[0] + b[10:20] + b[9] + b[1:9] + d + i["opcode"]
 
-    if parts[3] in symbol_table:
-        offset = symbol_table[parts[3]] - pc
-    else:
-        offset = int(parts[3])
-
-    imm = to_binary(offset, 13)
-
-    return (
-        imm[0] +          # imm[12]
-        imm[2:8] +        # imm[10:5]
-        rs2 +
-        rs1 +
-        info["funct3"] +
-        imm[8:12] +       # imm[4:1]
-        imm[1] +          # imm[11]
-        info["opcode"]
-    )
-
-def encode_U(parts):
-    info = OPCODE_TABLE[parts[0]]
-    rd = REGISTER_MAP[parts[1]]
-    imm_bin = to_binary(parts[2], 20)
-    return imm_bin + rd + info["opcode"]
-
-def encode_J(parts, pc, symbol_table):
-    info = OPCODE_TABLE[parts[0]]
-    rd = REGISTER_MAP[parts[1]]
-
-    if parts[2] in symbol_table:
-        offset = symbol_table[parts[2]] - pc
-    else:
-        offset = int(parts[2])
-
-    imm = to_binary(offset, 21)
-
-    return (
-        imm[0] +          # imm[20]
-        imm[10:20] +      # imm[10:1]
-        imm[9] +          # imm[11]
-        imm[1:9] +        # imm[19:12]
-        rd +
-        info["opcode"]
-    )
-
-# ----------------------------------------
-# SECOND PASS (WITH ERROR HANDLING)
-# ----------------------------------------
-
-def second_pass(lines, symbol_table):
-    pc = 0
-    output = []
-
-    for line in lines:
+def second_pass(a, s):
+    p = 0
+    o = []
+    for l in a:
         try:
-            if ":" in line:
-                if line.strip().endswith(":"):
+            if ":" in l:
+                if l.strip().endswith(":"):
                     continue
                 else:
-                    line = line.split(":")[1].strip()
-
-            line = line.replace(",", " ")
-            parts = line.split()
-
-            instr = parts[0]
-
-            if instr not in OPCODE_TABLE:
-                print("Error")
-                sys.exit()
-
-            instr_type = OPCODE_TABLE[instr]["type"]
-
-            if instr_type == "R":
-                binary = encode_R(parts)
-            elif instr_type == "I":
-                binary = encode_I(parts)
-            elif instr_type == "S":
-                binary = encode_S(parts)
-            elif instr_type == "B":
-                binary = encode_B(parts, pc, symbol_table)
-            elif instr_type == "U":
-                binary = encode_U(parts)
-            elif instr_type == "J":
-                binary = encode_J(parts, pc, symbol_table)
-
-            output.append(binary)
-            pc += 4
-
+                    l = l.split(":")[1].strip()
+            l = l.replace(",", " ")
+            x = l.split()
+            if x[0] not in OPCODE_TABLE:
+                print("Error"); sys.exit()
+            t = OPCODE_TABLE[x[0]]["type"]
+            if t == "R":
+                b = encode_R(x)
+            elif t == "I":
+                b = encode_I(x)
+            elif t == "S":
+                b = encode_S(x)
+            elif t == "B":
+                b = encode_B(x, p, s)
+            elif t == "U":
+                b = encode_U(x)
+            elif t == "J":
+                b = encode_J(x, p, s)
+            o.append(b)
+            p += 4
         except:
-            print("Error")
-            sys.exit()
-
-    return output
-
-# ----------------------------------------
-# MAIN
-# ----------------------------------------
+            print("Error"); sys.exit()
+    return o
 
 def main():
     try:
-        input_file = sys.argv[1]
-        output_file = sys.argv[2]
-
-        with open(input_file, "r") as f:
-            raw_lines = f.readlines()
-
-        lines = []
-        for line in raw_lines:
-            cleaned = clean_line(line)
-            if cleaned:
-                lines.append(cleaned)
-
-        symbol_table = first_pass(lines)
-        binary_output = second_pass(lines, symbol_table)
-
-        with open(output_file, "w") as f:
-            f.write("\n".join(binary_output))
-
+        i = sys.argv[1]
+        o = sys.argv[2]
+        with open(i, "r") as f:
+            r = f.readlines()
+        a = []
+        for l in r:
+            c = clean_line(l)
+            if c:
+                a.append(c)
+        s = first_pass(a)
+        b = second_pass(a, s)
+        with open(o, "w") as f:
+            f.write("\n".join(b))
     except:
-        print("Error")
-        sys.exit()
+        print("Error"); sys.exit()
 
 if __name__ == "__main__":
     main()
