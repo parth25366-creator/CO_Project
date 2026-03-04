@@ -1,0 +1,1 @@
+Error at line 22: Virtual Halt not last instruction
