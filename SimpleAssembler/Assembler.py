@@ -52,20 +52,29 @@ REGISTER_MAP = {
 # ----------------------------------------
 
 OPCODE_TABLE = {
+    # R type
     "add":  {"type": "R", "opcode": "0110011", "funct3": "000", "funct7": "0000000"},
     "sub":  {"type": "R", "opcode": "0110011", "funct3": "000", "funct7": "0100000"},
+    "slt":  {"type": "R", "opcode": "0110011", "funct3": "010", "funct7": "0000000"},
+    "srl":  {"type": "R", "opcode": "0110011", "funct3": "101", "funct7": "0000000"},
 
+    # I type
     "addi": {"type": "I", "opcode": "0010011", "funct3": "000"},
     "lw":   {"type": "I", "opcode": "0000011", "funct3": "010"},
     "jalr": {"type": "I", "opcode": "1100111", "funct3": "000"},
 
+    # S type
     "sw":   {"type": "S", "opcode": "0100011", "funct3": "010"},
 
+    # B type
     "beq":  {"type": "B", "opcode": "1100011", "funct3": "000"},
+    "bne":  {"type": "B", "opcode": "1100011", "funct3": "001"},
 
+    # U type
     "lui":  {"type": "U", "opcode": "0110111"},
     "auipc":{"type": "U", "opcode": "0010111"},
 
+    # J type
     "jal":  {"type": "J", "opcode": "1101111"},
 }
 
@@ -84,7 +93,7 @@ def clean_line(line):
     return line.strip()
 
 # ----------------------------------------
-# FIRST PASS (LABEL COLLECTION)
+# FIRST PASS
 # ----------------------------------------
 
 def first_pass(lines):
@@ -111,14 +120,7 @@ def encode_R(parts):
     rs2 = REGISTER_MAP[parts[3]]
     info = OPCODE_TABLE[instr]
 
-    return (
-        info["funct7"] +
-        rs2 +
-        rs1 +
-        info["funct3"] +
-        rd +
-        info["opcode"]
-    )
+    return info["funct7"] + rs2 + rs1 + info["funct3"] + rd + info["opcode"]
 
 def encode_I(parts):
     instr = parts[0]
@@ -135,13 +137,7 @@ def encode_I(parts):
 
     imm_bin = to_binary(imm, 12)
 
-    return (
-        imm_bin +
-        rs1 +
-        info["funct3"] +
-        rd +
-        info["opcode"]
-    )
+    return imm_bin + rs1 + info["funct3"] + rd + info["opcode"]
 
 def encode_S(parts):
     instr = parts[0]
@@ -154,14 +150,7 @@ def encode_S(parts):
 
     imm_bin = to_binary(imm, 12)
 
-    return (
-        imm_bin[:7] +
-        rs2 +
-        rs1 +
-        info["funct3"] +
-        imm_bin[7:] +
-        info["opcode"]
-    )
+    return imm_bin[:7] + rs2 + rs1 + info["funct3"] + imm_bin[7:] + info["opcode"]
 
 def encode_B(parts, pc, symbol_table):
     instr = parts[0]
@@ -170,8 +159,11 @@ def encode_B(parts, pc, symbol_table):
     rs1 = REGISTER_MAP[parts[1]]
     rs2 = REGISTER_MAP[parts[2]]
 
-    target = symbol_table[parts[3]]
-    offset = target - pc
+    if parts[3] in symbol_table:
+        target = symbol_table[parts[3]]
+        offset = target - pc
+    else:
+        offset = int(parts[3])
 
     imm_bin = to_binary(offset, 13)
 
@@ -200,9 +192,13 @@ def encode_J(parts, pc, symbol_table):
     info = OPCODE_TABLE[instr]
 
     rd = REGISTER_MAP[parts[1]]
-    target = symbol_table[parts[2]]
 
-    offset = target - pc
+    if parts[2] in symbol_table:
+        target = symbol_table[parts[2]]
+        offset = target - pc
+    else:
+        offset = int(parts[2])
+
     imm_bin = to_binary(offset, 21)
 
     return (
@@ -229,23 +225,29 @@ def second_pass(lines, symbol_table):
         line = line.replace(",", " ")
         parts = line.split()
 
-        instr = parts[0]
-        instr_type = OPCODE_TABLE[instr]["type"]
+        try:
+            instr = parts[0]
+            instr_type = OPCODE_TABLE[instr]["type"]
 
-        if instr_type == "R":
-            binary = encode_R(parts)
-        elif instr_type == "I":
-            binary = encode_I(parts)
-        elif instr_type == "S":
-            binary = encode_S(parts)
-        elif instr_type == "B":
-            binary = encode_B(parts, pc, symbol_table)
-        elif instr_type == "U":
-            binary = encode_U(parts)
-        elif instr_type == "J":
-            binary = encode_J(parts, pc, symbol_table)
+            if instr_type == "R":
+                binary = encode_R(parts)
+            elif instr_type == "I":
+                binary = encode_I(parts)
+            elif instr_type == "S":
+                binary = encode_S(parts)
+            elif instr_type == "B":
+                binary = encode_B(parts, pc, symbol_table)
+            elif instr_type == "U":
+                binary = encode_U(parts)
+            elif instr_type == "J":
+                binary = encode_J(parts, pc, symbol_table)
 
-        output.append(binary)
+            output.append(binary)
+
+        except:
+            print("Error")
+            sys.exit()
+
         pc += 4
 
     return output
@@ -258,20 +260,24 @@ def main():
     input_file = sys.argv[1]
     output_file = sys.argv[2]
 
-    with open(input_file, "r") as f:
-        raw_lines = f.readlines()
+    try:
+        with open(input_file, "r") as f:
+            raw_lines = f.readlines()
 
-    lines = []
-    for line in raw_lines:
-        cleaned = clean_line(line)
-        if cleaned:
-            lines.append(cleaned)
+        lines = []
+        for line in raw_lines:
+            cleaned = clean_line(line)
+            if cleaned:
+                lines.append(cleaned)
 
-    symbol_table = first_pass(lines)
-    binary_output = second_pass(lines, symbol_table)
+        symbol_table = first_pass(lines)
+        binary_output = second_pass(lines, symbol_table)
 
-    with open(output_file, "w") as f:
-        f.write("\n".join(binary_output))
+        with open(output_file, "w") as f:
+            f.write("\n".join(binary_output))
+
+    except:
+        print("Error")
 
 if __name__ == "__main__":
     main()
