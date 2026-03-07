@@ -1,269 +1,218 @@
 import sys
+import re
 
-# maps every register name (both x0-x31 and ABI names) to its 5-bit binary string
-REGISTER_MAP = {
-    **{f"x{i}": format(i, "05b") for i in range(32)},
-    "zero": format(0,  "05b"),
-    "ra":   format(1,  "05b"),
-    "sp":   format(2,  "05b"),
-    "gp":   format(3,  "05b"),
-    "tp":   format(4,  "05b"),
-    "t0":   format(5,  "05b"),
-    "t1":   format(6,  "05b"),
-    "t2":   format(7,  "05b"),
-    "s0":   format(8,  "05b"),
-    "fp":   format(8,  "05b"),
-    "s1":   format(9,  "05b"),
-    "a0":   format(10, "05b"),
-    "a1":   format(11, "05b"),
-    "a2":   format(12, "05b"),
-    "a3":   format(13, "05b"),
-    "a4":   format(14, "05b"),
-    "a5":   format(15, "05b"),
-    "a6":   format(16, "05b"),
-    "a7":   format(17, "05b"),
-    "s2":   format(18, "05b"),
-    "s3":   format(19, "05b"),
-    "s4":   format(20, "05b"),
-    "s5":   format(21, "05b"),
-    "s6":   format(22, "05b"),
-    "s7":   format(23, "05b"),
-    "s8":   format(24, "05b"),
-    "s9":   format(25, "05b"),
-    "s10":  format(26, "05b"),
-    "s11":  format(27, "05b"),
-    "t3":   format(28, "05b"),
-    "t4":   format(29, "05b"),
-    "t5":   format(30, "05b"),
-    "t6":   format(31, "05b"),
+# --- Instruction Encodings [cite: 72, 78, 87, 98, 105, 113] ---
+R_TYPE = {
+    "add":  {"opcode": "0110011", "funct3": "000", "funct7": "0000000"},
+    "sub":  {"opcode": "0110011", "funct3": "000", "funct7": "0100000"},
+    "sll":  {"opcode": "0110011", "funct3": "001", "funct7": "0000000"},
+    "slt":  {"opcode": "0110011", "funct3": "010", "funct7": "0000000"},
+    "sltu": {"opcode": "0110011", "funct3": "011", "funct7": "0000000"},
+    "xor":  {"opcode": "0110011", "funct3": "100", "funct7": "0000000"},
+    "srl":  {"opcode": "0110011", "funct3": "101", "funct7": "0000000"},
+    "or":   {"opcode": "0110011", "funct3": "110", "funct7": "0000000"},
+    "and":  {"opcode": "0110011", "funct3": "111", "funct7": "0000000"}
 }
 
-# for each mnemonic, stores the type and all the fixed encoding fields
-OPCODE_TABLE = {
-    # R-type (opcode 0110011) - all reg-reg arithmetic
-    "add":  {"type": "R", "opcode": "0110011", "funct3": "000", "funct7": "0000000"},
-    "sub":  {"type": "R", "opcode": "0110011", "funct3": "000", "funct7": "0100000"},
-    "sll":  {"type": "R", "opcode": "0110011", "funct3": "001", "funct7": "0000000"},
-    "slt":  {"type": "R", "opcode": "0110011", "funct3": "010", "funct7": "0000000"},
-    "sltu": {"type": "R", "opcode": "0110011", "funct3": "011", "funct7": "0000000"},
-    "xor":  {"type": "R", "opcode": "0110011", "funct3": "100", "funct7": "0000000"},
-    "srl":  {"type": "R", "opcode": "0110011", "funct3": "101", "funct7": "0000000"},
-    "or":   {"type": "R", "opcode": "0110011", "funct3": "110", "funct7": "0000000"},
-    "and":  {"type": "R", "opcode": "0110011", "funct3": "111", "funct7": "0000000"},
-
-    # I-type - immediate arithmetic + loads + jalr
-    "addi":  {"type": "I", "opcode": "0010011", "funct3": "000"},
-    "sltiu": {"type": "I", "opcode": "0010011", "funct3": "011"},
-    "lw":    {"type": "I", "opcode": "0000011", "funct3": "010"},
-    "jalr":  {"type": "I", "opcode": "1100111", "funct3": "000"},
-
-    # S-type - stores
-    "sw":    {"type": "S", "opcode": "0100011", "funct3": "010"},
-
-    # B-type - branches (all share opcode 1100011, funct3 tells which branch)
-    "beq":   {"type": "B", "opcode": "1100011", "funct3": "000"},
-    "bne":   {"type": "B", "opcode": "1100011", "funct3": "001"},
-    "blt":   {"type": "B", "opcode": "1100011", "funct3": "100"},
-    "bge":   {"type": "B", "opcode": "1100011", "funct3": "101"},
-    "bltu":  {"type": "B", "opcode": "1100011", "funct3": "110"},
-    "bgeu":  {"type": "B", "opcode": "1100011", "funct3": "111"},
-
-    # U-type - load upper immediate
-    "lui":   {"type": "U", "opcode": "0110111"},
-    "auipc": {"type": "U", "opcode": "0010111"},
-
-    # J-type - jump and link
-    "jal":   {"type": "J", "opcode": "1101111"},
+I_TYPE = {
+    "lw":    {"opcode": "0000011", "funct3": "010"},
+    "addi":  {"opcode": "0010011", "funct3": "000"},
+    "sltiu": {"opcode": "0010011", "funct3": "011"},
+    "jalr":  {"opcode": "1100111", "funct3": "000"}
 }
 
+S_TYPE = {"sw": {"opcode": "0100011", "funct3": "010"}}
 
-def to_binary(value, num_bits):
-    # converts an int to two's complement binary of given width
-    value = int(value)
-    if value < 0:
-        value = (1 << num_bits) + value
-    return format(value, f"0{num_bits}b")
+B_TYPE = {
+    "beq":  {"opcode": "1100011", "funct3": "000"},
+    "bne":  {"opcode": "1100011", "funct3": "001"},
+    "blt":  {"opcode": "1100011", "funct3": "100"},
+    "bge":  {"opcode": "1100011", "funct3": "101"},
+    "bltu": {"opcode": "1100011", "funct3": "110"},
+    "bgeu": {"opcode": "1100011", "funct3": "111"}
+}
 
+U_TYPE = {
+    "lui":   {"opcode": "0110111"},
+    "auipc": {"opcode": "0010111"}
+}
 
-def clean_line(line):
-    # strip comments (everything after #) and whitespace
-    return line.split("#")[0].strip()
+J_TYPE = {"jal": {"opcode": "1101111"}}
 
+# --- Register Mapping (Table 17) [cite: 122, 123] ---
+REGISTERS = {
+    "zero": "00000", "ra": "00001", "sp": "00010", "gp": "00011", "tp": "00100",
+    "t0": "00101", "t1": "00110", "t2": "00111", "s0": "01000", "fp": "01000",
+    "s1": "01001", "a0": "01010", "a1": "01011", "a2": "01100", "a3": "01101",
+    "a4": "01110", "a5": "01111", "a6": "10000", "a7": "10001", "s2": "10010",
+    "s3": "10011", "s4": "10100", "s5": "10101", "s6": "10110", "s7": "10111",
+    "s8": "11000", "s9": "11001", "s10": "11010", "s11": "11011", "t3": "11100",
+    "t4": "11101", "t5": "11110", "t6": "11111"
+}
 
-def first_pass(lines):
-    # go through every line and record where each label is (its byte address)
-    # this is needed so we can resolve forward references in pass 2
-    symbol_table = {}
-    pc = 0
-    for line in lines:
-        if ":" in line:
-            label, rest = line.split(":", 1)
-            symbol_table[label.strip()] = pc
-            if rest.strip() != "":
-                pc += 4   # label is on same line as an instruction
-        else:
-            pc += 4
-    return symbol_table
-
-
-def encode_R(tokens):
-    # format: funct7 | rs2 | rs1 | funct3 | rd | opcode
-    info = OPCODE_TABLE[tokens[0]]
-    rd   = REGISTER_MAP[tokens[1]]
-    rs1  = REGISTER_MAP[tokens[2]]
-    rs2  = REGISTER_MAP[tokens[3]]
-    return info["funct7"] + rs2 + rs1 + info["funct3"] + rd + info["opcode"]
-
-
-def encode_I(tokens):
-    # format: imm[11:0] | rs1 | funct3 | rd | opcode
-    # lw and jalr use  imm(rs1)  syntax, others use  rs1, imm
-    info = OPCODE_TABLE[tokens[0]]
-    rd   = REGISTER_MAP[tokens[1]]
-
-    if tokens[0] in ("lw", "jalr") and "(" in tokens[2]:
-        imm_str, rs1_str = tokens[2].split("(")
-        rs1 = REGISTER_MAP[rs1_str.replace(")", "")]
-        imm = imm_str
-    else:
-        rs1 = REGISTER_MAP[tokens[2]]
-        imm = tokens[3]
-
-    imm_bin = to_binary(imm, 12)
-    return imm_bin + rs1 + info["funct3"] + rd + info["opcode"]
-
-
-def encode_S(tokens):
-    # format: imm[11:5] | rs2 | rs1 | funct3 | imm[4:0] | opcode
-    # the 12-bit immediate is split across two places in the instruction
-    info    = OPCODE_TABLE[tokens[0]]
-    rs2     = REGISTER_MAP[tokens[1]]
-    imm_str, rs1_str = tokens[2].split("(")
-    rs1     = REGISTER_MAP[rs1_str.replace(")", "")]
-    imm_bin = to_binary(imm_str, 12)
-    return imm_bin[:7] + rs2 + rs1 + info["funct3"] + imm_bin[7:] + info["opcode"]
-
-
-def encode_B(tokens, current_pc, symbol_table):
-    # format: imm[12,10:5] | rs2 | rs1 | funct3 | imm[4:1,11] | opcode
-    # offset = target address - current pc  (PC-relative)
-    # bit 0 of offset is always 0 so it's not stored -> encode 13 bits, store 12
-    info   = OPCODE_TABLE[tokens[0]]
-    rs1    = REGISTER_MAP[tokens[1]]
-    rs2    = REGISTER_MAP[tokens[2]]
-    target = tokens[3]
-    offset = symbol_table[target] - current_pc if target in symbol_table else int(target)
-
-    b = to_binary(offset, 13)
-    # scramble: [12] [10:5] rs2 rs1 funct3 [4:1] [11] opcode
-    return b[0] + b[2:8] + rs2 + rs1 + info["funct3"] + b[8:12] + b[1] + info["opcode"]
-
-
-def encode_U(tokens):
-    # format: imm[31:12] | rd | opcode  (straight 20-bit immediate)
-    info    = OPCODE_TABLE[tokens[0]]
-    rd      = REGISTER_MAP[tokens[1]]
-    imm_bin = to_binary(tokens[2], 20)
-    return imm_bin + rd + info["opcode"]
-
-
-def encode_J(tokens, current_pc, symbol_table):
-    # format: imm[20,10:1,11,19:12] | rd | opcode
-    # same idea as B-type - offset is PC-relative, bit 0 implicit
-    info   = OPCODE_TABLE[tokens[0]]
-    rd     = REGISTER_MAP[tokens[1]]
-    target = tokens[2]
-    offset = symbol_table[target] - current_pc if target in symbol_table else int(target)
-
-    b = to_binary(offset, 21)
-    # scramble: [20] [10:1] [11] [19:12] rd opcode
-    return b[0] + b[10:20] + b[9] + b[1:9] + rd + info["opcode"]
-
-
-def second_pass(lines, symbol_table):
-    # encode every instruction into a 32-bit binary string
-    pc = 0
-    output_lines = []
-
-    for line in lines:
-        try:
-            # if there's a label prefix, strip it
-            if ":" in line:
-                if line.strip().endswith(":"):
-                    continue  # label-only line, nothing to encode
-                line = line.split(":", 1)[1].strip()
-
-            tokens   = line.replace(",", " ").split()
-            mnemonic = tokens[0]
-
-            if mnemonic not in OPCODE_TABLE:
-                print(f"Error: unknown instruction '{mnemonic}'")
-                sys.exit(1)
-
-            t = OPCODE_TABLE[mnemonic]["type"]
-
-            if t == "R":
-                binary = encode_R(tokens)
-            elif t == "I":
-                binary = encode_I(tokens)
-            elif t == "S":
-                binary = encode_S(tokens)
-            elif t == "B":
-                binary = encode_B(tokens, pc, symbol_table)
-            elif t == "U":
-                binary = encode_U(tokens)
-            elif t == "J":
-                binary = encode_J(tokens, pc, symbol_table)
-
-            output_lines.append(binary)
-            pc += 4
-
-        except (KeyError, ValueError) as e:
-            print(f"Error on line '{line}': {e}")
-            sys.exit(1)
-
-    return output_lines
-
-
-def main():
-    if len(sys.argv) < 3:
-        print("usage: python3 Assembler.py <input.asm> <output.bin> [readable.txt]")
+# --- Helper Functions ---
+def to_bin(val, bits, line_num):
+    """Converts int to 2's complement binary, enforcing bit length bounds."""
+    min_val = -(1 << (bits - 1))
+    max_val = (1 << (bits - 1)) - 1
+    if not (min_val <= val <= max_val):
+        print(f"Error on line {line_num}: Immediate {val} goes out of bounds for {bits}-bit size.")
         sys.exit(1)
+    if val < 0:
+        val = (1 << bits) + val
+    return bin(val)[2:].zfill(bits)
 
-    input_file  = sys.argv[1]
-    output_file = sys.argv[2]
-    # sys.argv[3] is the readable file path that the grader passes - we accept it but don't use it
+def parse_mem_operand(operand):
+    """Extracts immediate and register from syntax like 'offset(rs1)'."""
+    match = re.match(r"(-?\d+)\((.+)\)", operand)
+    if match:
+        return int(match.group(1)), match.group(2).strip()
+    return None, None
 
+def check_reg(reg, line_num):
+    """Validates the ABI register name[cite: 133]."""
+    if reg not in REGISTERS:
+        print(f"Error on line {line_num}: Typo or illegal register name '{reg}'.")
+        sys.exit(1)
+    return REGISTERS[reg]
+
+# --- Main Assembler Logic ---
+def assemble(input_file, output_file):
     try:
-        with open(input_file, "r") as f:
+        with open(input_file, 'r') as f:
             raw_lines = f.readlines()
     except FileNotFoundError:
-        print(f"Error: can't find input file '{input_file}'")
+        print(f"Error: Could not find input file '{input_file}'.")
         sys.exit(1)
 
-    # clean up lines
-    cleaned = []
-    for line in raw_lines:
-        c = clean_line(line)
-        if c:
-            cleaned.append(c)
+    # Clean and filter lines [cite: 131]
+    lines = []
+    for num, line in enumerate(raw_lines, 1):
+        line = line.split('#')[0].strip() # Strip comments and whitespace
+        if line:
+            lines.append((num, line))
 
-    # every valid program needs a virtual halt: beq zero,zero,0
-    has_halt = any(
-        "beq" in line and "zero" in line and
-        line.replace(",", " ").split()[-1] in ("0", "0x0")
-        for line in cleaned
-    )
-    if not has_halt:
-        print("Error: no virtual halt found (need beq zero,zero,0)")
+    if not lines:
+        print("Error: Input file is empty.")
         sys.exit(1)
 
-    symbol_table = first_pass(cleaned)
-    binary_lines = second_pass(cleaned, symbol_table)
+    # Strict Virtual Halt Check 
+    last_line = lines[-1][1].replace(" ", "")
+    if last_line not in ["beqzero,zero,0x00000000", "beqzero,zero,0"]:
+        print(f"Error: Missing or misplaced Virtual Halt at the end of the program.")
+        sys.exit(1)
 
-    with open(output_file, "w") as f:
-        f.write("\n".join(binary_lines))
+    labels = {}
+    instructions = []
+    
+    # PASS 1: Calculate PC and Extract Labels 
+    pc = 0
+    for original_line_num, line in lines:
+        if ":" in line:
+            label_part, instr_part = line.split(":", 1)
+            label = label_part.strip()
+            if not label[0].isalpha():
+                print(f"Error on line {original_line_num}: Label '{label}' must start with a character.")
+                sys.exit(1)
+            labels[label] = pc
+            if instr_part.strip():
+                instructions.append((pc, instr_part.strip(), original_line_num))
+                pc += 4
+        else:
+            instructions.append((pc, line, original_line_num))
+            pc += 4
 
+    # PASS 2: Encode Instructions
+    binary_output = []
+    for pc, instr, line_num in instructions:
+        # Catch virtual halt specifically to output the exact binary [cite: 142]
+        if instr.replace(" ", "") in ["beqzero,zero,0x00000000", "beqzero,zero,0"]:
+            binary_output.append("00000000000000000000000001100011")
+            continue
+            
+        parts = instr.replace(',', ' ').split()
+        mnemonic = parts[0]
+
+        try:
+            if mnemonic in R_TYPE:
+                # add rd, rs1, rs2
+                rd, rs1, rs2 = parts[1], parts[2], parts[3]
+                op = R_TYPE[mnemonic]
+                binary_output.append(f"{op['funct7']}{check_reg(rs2, line_num)}{check_reg(rs1, line_num)}{op['funct3']}{check_reg(rd, line_num)}{op['opcode']}")
+
+            elif mnemonic in I_TYPE:
+                op = I_TYPE[mnemonic]
+                if mnemonic == "lw":
+                    # lw rd, imm(rs1) [cite: 153]
+                    rd = parts[1]
+                    imm, rs1 = parse_mem_operand(parts[2])
+                    b_imm = to_bin(imm, 12, line_num)
+                    binary_output.append(f"{b_imm}{check_reg(rs1, line_num)}{op['funct3']}{check_reg(rd, line_num)}{op['opcode']}")
+                else:
+                    # addi rd, rs1, imm
+                    rd, rs1, imm = parts[1], parts[2], parts[3]
+                    b_imm = to_bin(int(imm), 12, line_num)
+                    binary_output.append(f"{b_imm}{check_reg(rs1, line_num)}{op['funct3']}{check_reg(rd, line_num)}{op['opcode']}")
+
+            elif mnemonic in S_TYPE:
+                # sw rs2, imm(rs1) [cite: 156]
+                op = S_TYPE[mnemonic]
+                rs2 = parts[1]
+                imm, rs1 = parse_mem_operand(parts[2])
+                b_imm = to_bin(imm, 12, line_num)
+                binary_output.append(f"{b_imm[:7]}{check_reg(rs2, line_num)}{check_reg(rs1, line_num)}{op['funct3']}{b_imm[7:]}{op['opcode']}")
+
+            elif mnemonic in B_TYPE:
+                # beq rs1, rs2, label/offset [cite: 158]
+                op = B_TYPE[mnemonic]
+                rs1, rs2, target = parts[1], parts[2], parts[3]
+                
+                offset = labels[target] - pc if target in labels else int(target)
+                b_imm = to_bin(offset, 13, line_num) # 13 bits for offset [cite: 141]
+                
+                # Scramble: imm[12|10:5] | rs2 | rs1 | funct3 | imm[4:1|11] | opcode [cite: 97]
+                b_str = f"{b_imm[0]}{b_imm[2:8]}{check_reg(rs2, line_num)}{check_reg(rs1, line_num)}{op['funct3']}{b_imm[8:12]}{b_imm[1]}{op['opcode']}"
+                binary_output.append(b_str)
+
+            elif mnemonic in U_TYPE:
+                # lui rd, imm [cite: 160]
+                op = U_TYPE[mnemonic]
+                rd, imm = parts[1], parts[2]
+                b_imm = to_bin(int(imm), 32, line_num)[:20] # Take top 20 bits
+                binary_output.append(f"{b_imm}{check_reg(rd, line_num)}{op['opcode']}")
+
+            elif mnemonic in J_TYPE:
+                # jal rd, label/offset [cite: 162]
+                op = J_TYPE[mnemonic]
+                rd, target = parts[1], parts[2]
+                
+                offset = labels[target] - pc if target in labels else int(target)
+                b_imm = to_bin(offset, 21, line_num) 
+                
+                # Scramble: imm[20|10:1|11|19:12] [cite: 112]
+                b_str = f"{b_imm[0]}{b_imm[10:20]}{b_imm[9]}{b_imm[1:9]}{check_reg(rd, line_num)}{op['opcode']}"
+                binary_output.append(b_str)
+
+            else:
+                print(f"Error on line {line_num}: Unsupported or illegal instruction '{mnemonic}'.")
+                sys.exit(1)
+
+        except (IndexError, ValueError) as e:
+            print(f"Error on line {line_num}: Syntax error or invalid operand format.")
+            sys.exit(1)
+
+    # Write output to text file as 32-character binary strings [cite: 126, 147]
+    with open(output_file, 'w') as f:
+        for b in binary_output:
+            f.write(b + '\n')
+            
+    print("Assembly successful.")
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 3:
+        print("Usage: python assembler.py <input.s> <output.txt>")
+        sys.exit(1)
+    assemble(sys.argv[1], sys.argv[2])
+
+
+
