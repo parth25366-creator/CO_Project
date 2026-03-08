@@ -1,7 +1,6 @@
 import sys
 import re
 
-# --- Instruction Encodings [cite: 72, 78, 87, 98, 105, 113] ---
 R_TYPE = {
     "add":  {"opcode": "0110011", "funct3": "000", "funct7": "0000000"},
     "sub":  {"opcode": "0110011", "funct3": "000", "funct7": "0100000"},
@@ -39,7 +38,6 @@ U_TYPE = {
 
 J_TYPE = {"jal": {"opcode": "1101111"}}
 
-# --- Register Mapping (Table 17) [cite: 122, 123] ---
 REGISTERS = {
     "zero": "00000", "ra": "00001", "sp": "00010", "gp": "00011", "tp": "00100",
     "t0": "00101", "t1": "00110", "t2": "00111", "s0": "01000", "fp": "01000",
@@ -50,7 +48,6 @@ REGISTERS = {
     "t4": "11101", "t5": "11110", "t6": "11111"
 }
 
-# --- Helper Functions ---
 def to_bin(val, bits, line_num):
     """Converts int to 2's complement binary, enforcing bit length bounds."""
     min_val = -(1 << (bits - 1))
@@ -76,7 +73,6 @@ def check_reg(reg, line_num):
         sys.exit(1)
     return REGISTERS[reg]
 
-# --- Main Assembler Logic ---
 def assemble(input_file, output_file):
     try:
         with open(input_file, 'r') as f:
@@ -85,18 +81,16 @@ def assemble(input_file, output_file):
         print(f"Error: Could not find input file '{input_file}'.")
         sys.exit(1)
 
-    # Clean and filter lines [cite: 131]
     lines = []
     for num, line in enumerate(raw_lines, 1):
-        line = line.split('#')[0].strip() # Strip comments and whitespace
+        line = line.split('#')[0].strip() 
         if line:
             lines.append((num, line))
 
     if not lines:
         print("Error: Input file is empty.")
         sys.exit(1)
-
-    # Strict Virtual Halt Check 
+ 
     last_line = lines[-1][1].replace(" ", "")
     if last_line not in ["beqzero,zero,0x00000000", "beqzero,zero,0"]:
         print(f"Error: Missing or misplaced Virtual Halt at the end of the program.")
@@ -104,8 +98,7 @@ def assemble(input_file, output_file):
 
     labels = {}
     instructions = []
-    
-    # PASS 1: Calculate PC and Extract Labels 
+     
     pc = 0
     for original_line_num, line in lines:
         if ":" in line:
@@ -122,10 +115,9 @@ def assemble(input_file, output_file):
             instructions.append((pc, line, original_line_num))
             pc += 4
 
-    # PASS 2: Encode Instructions
     binary_output = []
     for pc, instr, line_num in instructions:
-        # Catch virtual halt specifically to output the exact binary [cite: 142]
+         
         if instr.replace(" ", "") in ["beqzero,zero,0x00000000", "beqzero,zero,0"]:
             binary_output.append("00000000000000000000000001100011")
             continue
@@ -135,7 +127,7 @@ def assemble(input_file, output_file):
 
         try:
             if mnemonic in R_TYPE:
-                # add rd, rs1, rs2
+                
                 rd, rs1, rs2 = parts[1], parts[2], parts[3]
                 op = R_TYPE[mnemonic]
                 binary_output.append(f"{op['funct7']}{check_reg(rs2, line_num)}{check_reg(rs1, line_num)}{op['funct3']}{check_reg(rd, line_num)}{op['opcode']}")
@@ -143,19 +135,19 @@ def assemble(input_file, output_file):
             elif mnemonic in I_TYPE:
                 op = I_TYPE[mnemonic]
                 if mnemonic == "lw":
-                    # lw rd, imm(rs1) [cite: 153]
+                    
                     rd = parts[1]
                     imm, rs1 = parse_mem_operand(parts[2])
                     b_imm = to_bin(imm, 12, line_num)
                     binary_output.append(f"{b_imm}{check_reg(rs1, line_num)}{op['funct3']}{check_reg(rd, line_num)}{op['opcode']}")
                 else:
-                    # addi rd, rs1, imm
+                   
                     rd, rs1, imm = parts[1], parts[2], parts[3]
                     b_imm = to_bin(int(imm), 12, line_num)
                     binary_output.append(f"{b_imm}{check_reg(rs1, line_num)}{op['funct3']}{check_reg(rd, line_num)}{op['opcode']}")
 
             elif mnemonic in S_TYPE:
-                # sw rs2, imm(rs1) [cite: 156]
+            
                 op = S_TYPE[mnemonic]
                 rs2 = parts[1]
                 imm, rs1 = parse_mem_operand(parts[2])
@@ -163,33 +155,32 @@ def assemble(input_file, output_file):
                 binary_output.append(f"{b_imm[:7]}{check_reg(rs2, line_num)}{check_reg(rs1, line_num)}{op['funct3']}{b_imm[7:]}{op['opcode']}")
 
             elif mnemonic in B_TYPE:
-                # beq rs1, rs2, label/offset [cite: 158]
+                
                 op = B_TYPE[mnemonic]
                 rs1, rs2, target = parts[1], parts[2], parts[3]
                 
                 offset = labels[target] - pc if target in labels else int(target)
-                b_imm = to_bin(offset, 13, line_num) # 13 bits for offset [cite: 141]
+                b_imm = to_bin(offset, 13, line_num) 
                 
-                # Scramble: imm[12|10:5] | rs2 | rs1 | funct3 | imm[4:1|11] | opcode [cite: 97]
+                
                 b_str = f"{b_imm[0]}{b_imm[2:8]}{check_reg(rs2, line_num)}{check_reg(rs1, line_num)}{op['funct3']}{b_imm[8:12]}{b_imm[1]}{op['opcode']}"
                 binary_output.append(b_str)
 
             elif mnemonic in U_TYPE:
-                # lui rd, imm [cite: 160]
+                
                 op = U_TYPE[mnemonic]
                 rd, imm = parts[1], parts[2]
-                b_imm = to_bin(int(imm), 32, line_num)[:20] # Take top 20 bits
+                b_imm = to_bin(int(imm), 32, line_num)[:20] 
                 binary_output.append(f"{b_imm}{check_reg(rd, line_num)}{op['opcode']}")
 
             elif mnemonic in J_TYPE:
-                # jal rd, label/offset [cite: 162]
+                
                 op = J_TYPE[mnemonic]
                 rd, target = parts[1], parts[2]
                 
                 offset = labels[target] - pc if target in labels else int(target)
                 b_imm = to_bin(offset, 21, line_num) 
                 
-                # Scramble: imm[20|10:1|11|19:12] [cite: 112]
                 b_str = f"{b_imm[0]}{b_imm[10:20]}{b_imm[9]}{b_imm[1:9]}{check_reg(rd, line_num)}{op['opcode']}"
                 binary_output.append(b_str)
 
@@ -201,7 +192,6 @@ def assemble(input_file, output_file):
             print(f"Error on line {line_num}: Syntax error or invalid operand format.")
             sys.exit(1)
 
-    # Write output to text file as 32-character binary strings [cite: 126, 147]
     with open(output_file, 'w') as f:
         for b in binary_output:
             f.write(b + '\n')
