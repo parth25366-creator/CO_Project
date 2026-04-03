@@ -199,7 +199,7 @@ def assemble(input_file, output_file):
     print("Assembly successful.")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    if len(sys.argv) < 3:
         print("Usage: python assembler.py <input.s> <output.txt>")
         sys.exit(1)
     assemble(sys.argv[1], sys.argv[2])
