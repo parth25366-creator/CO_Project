@@ -11,8 +11,8 @@ def sign_extend(val, bits):
     return val
 
 def to_bin32(val):
-    """Unsigned 32-bit binary string."""
-    return format(val & 0xFFFFFFFF, '032b')
+    """Unsigned 32-bit binary string with 0b prefix."""
+    return '0b' + format(val & 0xFFFFFFFF, '032b')
 
 
 # ──────────────────────────────────────────────
@@ -82,7 +82,7 @@ class Simulator:
     # ── Output helpers ────────────────────────
 
     def trace_line(self):
-        """PC + 32 registers, all as 32-bit binary, space-separated."""
+        """next_PC + 32 registers, all as 32-bit binary with 0b prefix."""
         regs = ' '.join(to_bin32(self.regs[i]) for i in range(32))
         return to_bin32(self.pc) + ' ' + regs
 
@@ -120,6 +120,8 @@ class Simulator:
             # ── Virtual halt: beq zero,zero,0 ──
             # Encoding: 00000000000000000000000001100011
             if instr == '00000000000000000000000001100011':
+                # PC stays same (branch to PC+0), update then trace
+                self.pc = self.pc  # no change
                 self.output.append(self.trace_line())
                 self.output.extend(self.mem_dump())
                 break
@@ -235,7 +237,7 @@ class Simulator:
                 print(f"Error: Invalid memory access at PC {hex(self.pc)}.")
                 break   # no trace line, no memory dump — terminate immediately
 
-            # ── Advance and record ────────────
+            # ── Advance PC first, then record state ──
             self.pc = next_pc
             self.output.append(self.trace_line())
 
