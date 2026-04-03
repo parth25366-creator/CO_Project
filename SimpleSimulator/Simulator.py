@@ -92,7 +92,7 @@ class Simulator:
         for i in range(32):
             addr = self.DATA_START + i * 4
             val  = self.memory.get(addr, 0)
-            lines.append(f'0x{addr:08x}:{to_bin32(val)}')
+            lines.append(f'0x{addr:08X}:{to_bin32(val)}')
         return lines
 
     # ── Main execution loop ───────────────────
