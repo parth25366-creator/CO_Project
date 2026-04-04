@@ -45,18 +45,16 @@ class Simulator:
     # ── Register access ───────────────────────
 
     def rreg(self, r):
-        """Read register (x0 always 0)."""
+        """Read register (x0 always 0). Returns unsigned 32-bit value."""
         return 0 if r == 0 else (self.regs[r] & 0xFFFFFFFF)
 
     def wreg(self, r, v):
-        """Write register (x0 silently discarded)."""
+        """Write register (x0 silently discarded). Stores as unsigned 32-bit."""
         if r != 0:
             self.regs[r] = v & 0xFFFFFFFF
 
     # ── Memory access ─────────────────────────
     # All memory accesses are WORD-ALIGNED (addr & ~3).
-    # This matches real RISC-V hardware behaviour where lw/sw
-    # operate on 4-byte aligned word addresses.
 
     def _word_addr(self, addr):
         """Round byte address down to nearest 4-byte word boundary."""
@@ -116,6 +114,7 @@ class Simulator:
             instr = self.program[idx]
 
             # ── Decode common fields ──────────
+            # String index 0 = bit 31 (MSB), index 31 = bit 0 (LSB)
             opcode = instr[25:32]       # bits [6:0]
             funct3 = instr[17:20]       # bits [14:12]
             funct7 = instr[0:7]         # bits [31:25]
@@ -138,67 +137,127 @@ class Simulator:
             #  R-TYPE   opcode 0110011
             # ══════════════════════════════════
             if opcode == '0110011':
-                v1  = self.rreg(rs1);  v2  = self.rreg(rs2)
-                sv1 = sign_extend(v1, 32); sv2 = sign_extend(v2, 32)
+                v1  = self.rreg(rs1)
+                v2  = self.rreg(rs2)
+                sv1 = sign_extend(v1, 32)
+                sv2 = sign_extend(v2, 32)
 
-                if   funct3 == '000' and funct7 == '0000000': self.wreg(rd, v1 + v2)           # add
-                elif funct3 == '000' and funct7 == '0100000': self.wreg(rd, sv1 - sv2)          # sub
-                elif funct3 == '001':                          self.wreg(rd, v1 << (v2 & 0x1F)) # sll
-                elif funct3 == '010':                          self.wreg(rd, 1 if sv1 < sv2 else 0)  # slt
-                elif funct3 == '011':                          self.wreg(rd, 1 if v1 < v2 else 0)    # sltu
-                elif funct3 == '100':                          self.wreg(rd, v1 ^ v2)            # xor
-                elif funct3 == '101' and funct7 == '0000000': self.wreg(rd, v1 >> (v2 & 0x1F))  # srl
-                elif funct3 == '110':                          self.wreg(rd, v1 | v2)             # or
-                elif funct3 == '111':                          self.wreg(rd, v1 & v2)             # and
+                if funct3 == '000':
+                    if funct7 == '0000000':
+                        self.wreg(rd, v1 + v2)                          # add
+                    elif funct7 == '0100000':
+                        self.wreg(rd, sv1 - sv2)                        # sub
+
+                elif funct3 == '001':
+                    self.wreg(rd, v1 << (v2 & 0x1F))                    # sll
+
+                elif funct3 == '010':
+                    self.wreg(rd, 1 if sv1 < sv2 else 0)                # slt
+
+                elif funct3 == '011':
+                    self.wreg(rd, 1 if v1 < v2 else 0)                  # sltu
+
+                elif funct3 == '100':
+                    self.wreg(rd, v1 ^ v2)                              # xor
+
+                elif funct3 == '101':
+                    shamt = v2 & 0x1F
+                    if funct7 == '0000000':
+                        self.wreg(rd, v1 >> shamt)                      # srl (logical)
+                    elif funct7 == '0100000':
+                        # SRA: arithmetic right shift — preserve sign bit
+                        self.wreg(rd, sv1 >> shamt)                     # sra (arithmetic)
+
+                elif funct3 == '110':
+                    self.wreg(rd, v1 | v2)                              # or
+
+                elif funct3 == '111':
+                    self.wreg(rd, v1 & v2)                              # and
 
             # ══════════════════════════════════
             #  I-TYPE ARITHMETIC   opcode 0010011
             # ══════════════════════════════════
             elif opcode == '0010011':
-                imm = sign_extend(int(instr[0:12], 2), 12)
                 v1  = self.rreg(rs1)
                 sv1 = sign_extend(v1, 32)
+                imm = sign_extend(int(instr[0:12], 2), 12)
 
-                if   funct3 == '000': self.wreg(rd, sv1 + imm)                                # addi
-                elif funct3 == '011': self.wreg(rd, 1 if v1 < (imm & 0xFFFFFFFF) else 0)      # sltiu
+                if funct3 == '000':
+                    self.wreg(rd, sv1 + imm)                            # addi
+
+                elif funct3 == '010':
+                    self.wreg(rd, 1 if sv1 < imm else 0)               # slti
+
+                elif funct3 == '011':
+                    # sltiu: sign-extend imm, then compare as unsigned
+                    self.wreg(rd, 1 if v1 < (imm & 0xFFFFFFFF) else 0) # sltiu
+
+                elif funct3 == '100':
+                    self.wreg(rd, v1 ^ (imm & 0xFFFFFFFF))             # xori
+
+                elif funct3 == '110':
+                    self.wreg(rd, v1 | (imm & 0xFFFFFFFF))             # ori
+
+                elif funct3 == '111':
+                    self.wreg(rd, v1 & (imm & 0xFFFFFFFF))             # andi
+
+                elif funct3 == '001':
+                    # SLLI: shift left logical immediate
+                    shamt = int(instr[7:12], 2)                         # rs2 field = shamt
+                    self.wreg(rd, v1 << shamt)                          # slli
+
+                elif funct3 == '101':
+                    # SRLI / SRAI distinguished by funct7 (top 7 bits of imm field)
+                    shamt  = int(instr[7:12], 2)                        # lower 5 bits = shamt
+                    top7   = instr[0:7]
+                    if top7 == '0000000':
+                        self.wreg(rd, v1 >> shamt)                      # srli (logical)
+                    elif top7 == '0100000':
+                        self.wreg(rd, sign_extend(v1, 32) >> shamt)    # srai (arithmetic)
 
             # ══════════════════════════════════
-            #  LOAD   opcode 0000011  (word-aligned)
+            #  LOAD   opcode 0000011  (word-aligned lw)
             # ══════════════════════════════════
             elif opcode == '0000011':
                 imm  = sign_extend(int(instr[0:12], 2), 12)
                 addr = (sign_extend(self.rreg(rs1), 32) + imm) & 0xFFFFFFFF
-                val, error = self.mread(addr)   # mread aligns internally
+                val, error = self.mread(addr)
                 if not error:
-                    self.wreg(rd, val)                                                          # lw
+                    self.wreg(rd, val)                                   # lw
 
             # ══════════════════════════════════
-            #  STORE   opcode 0100011  (word-aligned)
+            #  STORE   opcode 0100011  (word-aligned sw)
             # ══════════════════════════════════
             elif opcode == '0100011':
+                # S-type: imm[11:5] in bits[31:25], imm[4:0] in bits[11:7]
                 imm_raw = (int(instr[0:7], 2) << 5) | int(instr[20:25], 2)
                 imm     = sign_extend(imm_raw, 12)
                 addr    = (sign_extend(self.rreg(rs1), 32) + imm) & 0xFFFFFFFF
-                error   = self.mwrite(addr, self.rreg(rs2))  # mwrite aligns internally        # sw
+                error   = self.mwrite(addr, self.rreg(rs2))             # sw
 
             # ══════════════════════════════════
             #  B-TYPE   opcode 1100011
             # ══════════════════════════════════
             elif opcode == '1100011':
-                # Reconstruct imm[12:1] → sign-extended 13-bit offset
+                # B-type immediate reconstruction:
+                # imm[12]   = instr[0]   (bit 31)
+                # imm[11]   = instr[24]  (bit 7)
+                # imm[10:5] = instr[1:7] (bits 30:25)
+                # imm[4:1]  = instr[20:24] (bits 11:8)
+                # imm[0]    = 0 (implicit, branch targets are 2-byte aligned)
                 imm_raw = int(instr[0] + instr[24] + instr[1:7] + instr[20:24] + '0', 2)
                 imm     = sign_extend(imm_raw, 13)
 
-                v1 = self.rreg(rs1);  v2 = self.rreg(rs2)
-                sv1 = sign_extend(v1, 32); sv2 = sign_extend(v2, 32)
+                v1  = self.rreg(rs1);  v2  = self.rreg(rs2)
+                sv1 = sign_extend(v1, 32);  sv2 = sign_extend(v2, 32)
 
                 taken = False
-                if   funct3 == '000': taken = sv1 == sv2   # beq
-                elif funct3 == '001': taken = sv1 != sv2   # bne
-                elif funct3 == '100': taken = sv1 <  sv2   # blt
-                elif funct3 == '101': taken = sv1 >= sv2   # bge
-                elif funct3 == '110': taken = v1  <  v2    # bltu
-                elif funct3 == '111': taken = v1  >= v2    # bgeu
+                if   funct3 == '000': taken = sv1 == sv2               # beq
+                elif funct3 == '001': taken = sv1 != sv2               # bne
+                elif funct3 == '100': taken = sv1 <  sv2               # blt
+                elif funct3 == '101': taken = sv1 >= sv2               # bge
+                elif funct3 == '110': taken = v1  <  v2                # bltu
+                elif funct3 == '111': taken = v1  >= v2                # bgeu
 
                 if taken:
                     next_pc = (self.pc + imm) & 0xFFFFFFFF
@@ -207,25 +266,31 @@ class Simulator:
             #  U-TYPE: LUI   opcode 0110111
             # ══════════════════════════════════
             elif opcode == '0110111':
+                # LUI: place upper 20-bit immediate into rd[31:12], zero rd[11:0]
                 imm20 = int(instr[0:20], 2)
-                self.wreg(rd, (imm20 << 12) & 0xFFFFFFFF)                                      # lui
+                self.wreg(rd, (imm20 << 12) & 0xFFFFFFFF)              # lui
 
             # ══════════════════════════════════
             #  U-TYPE: AUIPC   opcode 0010111
             # ══════════════════════════════════
             elif opcode == '0010111':
                 imm20 = int(instr[0:20], 2)
-                self.wreg(rd, (self.pc + (imm20 << 12)) & 0xFFFFFFFF)                          # auipc
+                self.wreg(rd, (self.pc + (imm20 << 12)) & 0xFFFFFFFF)  # auipc
 
             # ══════════════════════════════════
             #  J-TYPE: JAL   opcode 1101111
             # ══════════════════════════════════
             elif opcode == '1101111':
-                # Reconstruct imm[20:1] → sign-extended 21-bit offset
+                # J-type immediate reconstruction:
+                # imm[20]    = instr[0]    (bit 31)
+                # imm[10:1]  = instr[1:11] (bits 30:21)
+                # imm[11]    = instr[11]   (bit 20)
+                # imm[19:12] = instr[12:20](bits 19:12)
+                # imm[0]     = 0 (implicit)
                 imm_raw = int(instr[0] + instr[12:20] + instr[11] + instr[1:11] + '0', 2)
                 imm     = sign_extend(imm_raw, 21)
-                self.wreg(rd, self.pc + 4)
-                next_pc = (self.pc + imm) & 0xFFFFFFFF                                         # jal
+                self.wreg(rd, self.pc + 4)                             # link
+                next_pc = (self.pc + imm) & 0xFFFFFFFF                # jal
 
             # ══════════════════════════════════
             #  I-TYPE: JALR   opcode 1100111
@@ -233,8 +298,8 @@ class Simulator:
             elif opcode == '1100111':
                 imm  = sign_extend(int(instr[0:12], 2), 12)
                 base = sign_extend(self.rreg(rs1), 32)
-                self.wreg(rd, self.pc + 4)
-                next_pc = (base + imm) & 0xFFFFFFFE    # clear LSB                             # jalr
+                self.wreg(rd, self.pc + 4)                             # link
+                next_pc = (base + imm) & 0xFFFFFFFE    # clear LSB    # jalr
 
             else:
                 print(f"Error: Unknown opcode '{opcode}' at PC {hex(self.pc)}.")
