@@ -28,7 +28,7 @@ class Simulator:
     def __init__(self):
         self.regs    = [0] * 32
         self.regs[2] = 0x0000017C   # sp initialised to 0x17C
-        self.memory  = {}           # sparse: addr -> uint32
+        self.memory  = {}           # sparse: word-aligned addr -> uint32
         self.pc      = 0
         self.program = []           # list of 32-char binary strings
         self.output  = []           # lines written to trace file
@@ -54,6 +54,13 @@ class Simulator:
             self.regs[r] = v & 0xFFFFFFFF
 
     # ── Memory access ─────────────────────────
+    # All memory accesses are WORD-ALIGNED (addr & ~3).
+    # This matches real RISC-V hardware behaviour where lw/sw
+    # operate on 4-byte aligned word addresses.
+
+    def _word_addr(self, addr):
+        """Round byte address down to nearest 4-byte word boundary."""
+        return addr & 0xFFFFFFFC
 
     def _valid_read(self, addr):
         return (self.PROG_START  <= addr <= self.PROG_END  or
@@ -65,18 +72,20 @@ class Simulator:
                 self.DATA_START  <= addr <= self.DATA_END)
 
     def mread(self, addr):
-        """Returns (value, error_bool)."""
-        addr &= 0xFFFFFFFF
-        if not self._valid_read(addr):
+        """Returns (value, error_bool). Access is word-aligned."""
+        addr  = addr & 0xFFFFFFFF
+        waddr = self._word_addr(addr)
+        if not self._valid_read(waddr):
             return 0, True
-        return self.memory.get(addr, 0), False
+        return self.memory.get(waddr, 0), False
 
     def mwrite(self, addr, val):
-        """Returns error_bool."""
-        addr &= 0xFFFFFFFF
-        if not self._valid_write(addr):
+        """Returns error_bool. Access is word-aligned."""
+        addr  = addr & 0xFFFFFFFF
+        waddr = self._word_addr(addr)
+        if not self._valid_write(waddr):
             return True
-        self.memory[addr] = val & 0xFFFFFFFF
+        self.memory[waddr] = val & 0xFFFFFFFF
         return False
 
     # ── Output helpers ────────────────────────
@@ -120,8 +129,7 @@ class Simulator:
             # ── Virtual halt: beq zero,zero,0 ──
             # Encoding: 00000000000000000000000001100011
             if instr == '00000000000000000000000001100011':
-                # PC stays same (branch to PC+0), update then trace
-                self.pc = self.pc  # no change
+                # PC stays the same (branch offset = 0), record trace then dump memory
                 self.output.append(self.trace_line())
                 self.output.extend(self.mem_dump())
                 break
@@ -133,15 +141,15 @@ class Simulator:
                 v1  = self.rreg(rs1);  v2  = self.rreg(rs2)
                 sv1 = sign_extend(v1, 32); sv2 = sign_extend(v2, 32)
 
-                if   funct3 == '000' and funct7 == '0000000': self.wreg(rd, v1 + v2)          # add
-                elif funct3 == '000' and funct7 == '0100000': self.wreg(rd, sv1 - sv2)         # sub
+                if   funct3 == '000' and funct7 == '0000000': self.wreg(rd, v1 + v2)           # add
+                elif funct3 == '000' and funct7 == '0100000': self.wreg(rd, sv1 - sv2)          # sub
                 elif funct3 == '001':                          self.wreg(rd, v1 << (v2 & 0x1F)) # sll
                 elif funct3 == '010':                          self.wreg(rd, 1 if sv1 < sv2 else 0)  # slt
                 elif funct3 == '011':                          self.wreg(rd, 1 if v1 < v2 else 0)    # sltu
-                elif funct3 == '100':                          self.wreg(rd, v1 ^ v2)           # xor
-                elif funct3 == '101' and funct7 == '0000000': self.wreg(rd, v1 >> (v2 & 0x1F)) # srl
-                elif funct3 == '110':                          self.wreg(rd, v1 | v2)            # or
-                elif funct3 == '111':                          self.wreg(rd, v1 & v2)            # and
+                elif funct3 == '100':                          self.wreg(rd, v1 ^ v2)            # xor
+                elif funct3 == '101' and funct7 == '0000000': self.wreg(rd, v1 >> (v2 & 0x1F))  # srl
+                elif funct3 == '110':                          self.wreg(rd, v1 | v2)             # or
+                elif funct3 == '111':                          self.wreg(rd, v1 & v2)             # and
 
             # ══════════════════════════════════
             #  I-TYPE ARITHMETIC   opcode 0010011
@@ -151,27 +159,27 @@ class Simulator:
                 v1  = self.rreg(rs1)
                 sv1 = sign_extend(v1, 32)
 
-                if   funct3 == '000': self.wreg(rd, sv1 + imm)                               # addi
-                elif funct3 == '011': self.wreg(rd, 1 if v1 < (imm & 0xFFFFFFFF) else 0)     # sltiu
+                if   funct3 == '000': self.wreg(rd, sv1 + imm)                                # addi
+                elif funct3 == '011': self.wreg(rd, 1 if v1 < (imm & 0xFFFFFFFF) else 0)      # sltiu
 
             # ══════════════════════════════════
-            #  LOAD   opcode 0000011
+            #  LOAD   opcode 0000011  (word-aligned)
             # ══════════════════════════════════
             elif opcode == '0000011':
                 imm  = sign_extend(int(instr[0:12], 2), 12)
                 addr = (sign_extend(self.rreg(rs1), 32) + imm) & 0xFFFFFFFF
-                val, error = self.mread(addr)
+                val, error = self.mread(addr)   # mread aligns internally
                 if not error:
-                    self.wreg(rd, val)                                                         # lw
+                    self.wreg(rd, val)                                                          # lw
 
             # ══════════════════════════════════
-            #  STORE   opcode 0100011
+            #  STORE   opcode 0100011  (word-aligned)
             # ══════════════════════════════════
             elif opcode == '0100011':
                 imm_raw = (int(instr[0:7], 2) << 5) | int(instr[20:25], 2)
                 imm     = sign_extend(imm_raw, 12)
                 addr    = (sign_extend(self.rreg(rs1), 32) + imm) & 0xFFFFFFFF
-                error   = self.mwrite(addr, self.rreg(rs2))                                   # sw
+                error   = self.mwrite(addr, self.rreg(rs2))  # mwrite aligns internally        # sw
 
             # ══════════════════════════════════
             #  B-TYPE   opcode 1100011
@@ -200,14 +208,14 @@ class Simulator:
             # ══════════════════════════════════
             elif opcode == '0110111':
                 imm20 = int(instr[0:20], 2)
-                self.wreg(rd, (imm20 << 12) & 0xFFFFFFFF)                                     # lui
+                self.wreg(rd, (imm20 << 12) & 0xFFFFFFFF)                                      # lui
 
             # ══════════════════════════════════
             #  U-TYPE: AUIPC   opcode 0010111
             # ══════════════════════════════════
             elif opcode == '0010111':
                 imm20 = int(instr[0:20], 2)
-                self.wreg(rd, (self.pc + (imm20 << 12)) & 0xFFFFFFFF)                         # auipc
+                self.wreg(rd, (self.pc + (imm20 << 12)) & 0xFFFFFFFF)                          # auipc
 
             # ══════════════════════════════════
             #  J-TYPE: JAL   opcode 1101111
@@ -217,7 +225,7 @@ class Simulator:
                 imm_raw = int(instr[0] + instr[12:20] + instr[11] + instr[1:11] + '0', 2)
                 imm     = sign_extend(imm_raw, 21)
                 self.wreg(rd, self.pc + 4)
-                next_pc = (self.pc + imm) & 0xFFFFFFFF                                        # jal
+                next_pc = (self.pc + imm) & 0xFFFFFFFF                                         # jal
 
             # ══════════════════════════════════
             #  I-TYPE: JALR   opcode 1100111
@@ -226,7 +234,7 @@ class Simulator:
                 imm  = sign_extend(int(instr[0:12], 2), 12)
                 base = sign_extend(self.rreg(rs1), 32)
                 self.wreg(rd, self.pc + 4)
-                next_pc = (base + imm) & 0xFFFFFFFE    # clear LSB                            # jalr
+                next_pc = (base + imm) & 0xFFFFFFFE    # clear LSB                             # jalr
 
             else:
                 print(f"Error: Unknown opcode '{opcode}' at PC {hex(self.pc)}.")
